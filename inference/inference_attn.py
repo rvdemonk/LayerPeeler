@@ -357,7 +357,7 @@ def parse_arguments() -> Config:
     parser.add_argument("--t2i_control_steps", type=int, default=40)
 
     # VLM Settings
-    parser.add_argument("--vlm_model_name", type=str, default="gemini-2.5-pro")
+    parser.add_argument("--vlm_model_name", type=str, default="gemini-pro-latest")
     parser.add_argument("--enable_mask_detection", action="store_true")
     parser.add_argument("--bbox_expansion", type=int, default=15)
     parser.add_argument("--mask_detection_temperature", type=float, default=0.5)

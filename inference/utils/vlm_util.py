@@ -23,7 +23,7 @@ class VLMAPIError(Exception):
 
 
 # API Configuration
-BASE_URL = "https://us.vveai.com/v1/chat/completions"
+BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
 DEFAULT_PROMPT = '''Analyze the provided flat-color, cartoon-style image. Based purely on the visual presentation, infer the visual stacking and occlusion of elements. Your goal is to identify **only** the elements that are visually positioned at the very top, meaning they are **not covered by any other element** within the image. Provide a concise caption describing these non-occluded elements.
 
@@ -383,6 +383,11 @@ def parse_segmentation_masks(
             print("Invalid bounding box", item["box_2d"])
             continue
         label = item["label"]
+        if "mask" not in item:  # newer Gemini models return bbox+label without inline masks
+            np_mask = np.zeros((img_height, img_width), dtype=np.uint8)
+            np_mask[abs_y0:abs_y1, abs_x0:abs_x1] = 255
+            masks.append(SegmentationMask(y0=abs_y0, x0=abs_x0, y1=abs_y1, x1=abs_x1, mask=np_mask, label=label))
+            continue
         png_str = item["mask"]
         if not png_str.startswith("data:image/png;base64,"):
             print("Invalid mask")
@@ -510,6 +515,8 @@ def create_payload(image_base64: str, model_name: str, prompt: str, temperature:
         messages.append({"type": "text", "text": "Here is the layer graph from the previous step:\n```json\n" + existing_layer_graph_json + "\n```"})
 
     payload_content = {
+        "max_tokens": 16384,
+        "reasoning_effort": "low",
         "model": model_name,
         "messages": [{
             "role": "user",
@@ -526,7 +533,12 @@ def get_response(payload: str) -> Dict[str, Any]:
     try:
         response = requests.post(BASE_URL, headers=API_HEADERS, data=payload)
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        rj = response.json()
+        content = rj["choices"][0]["message"]["content"]
+        if content is None or (isinstance(content, str) and not content.strip()):
+            fr = rj["choices"][0].get("finish_reason")
+            raise VLMAPIError(f"Empty content from VLM (finish_reason={fr})")
+        return content
     except requests.exceptions.RequestException as e:
         raise VLMAPIError(f"API request failed: {str(e)}")
     except (KeyError, IndexError) as e:

@@ -48,7 +48,17 @@ def load_or_generate(
             logger.warning(f"Error loading {description} from {file_path}: {e}. Regenerating...")
 
     logger.info(f"Generating {description}")
-    data = generate_func()
+    import json as _json
+    _last = None
+    for _att in range(3):
+        try:
+            data = generate_func()
+            break
+        except (_json.JSONDecodeError, AttributeError, TypeError, ValueError) as _e:
+            _last = _e
+            if logger: logger.warning(f"generate_func parse failure (attempt {_att+1}/3): {_e}")
+    else:
+        raise _last
     logger.info(f"Saving {description} to {file_path}")
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     save_func(data, file_path)
