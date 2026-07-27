@@ -313,7 +313,12 @@ Now, an editing operation attempted to remove the "blue square".
 Proceed with the analysis of the provided current image, considering the provided previous layer graph for verification, correction, and updates.
 '''
 
-MASK_PROMPT = '''Give the segmentation masks for the "{layers}". Output a JSON list of segmentation masks where each entry contains the 2D bounding box in the key "box_2d", the segmentation mask in key "mask", and the text label in the key "label". Use descriptive labels.'''
+# NOTE: we deliberately do NOT request inline segmentation masks ("mask" key):
+# downstream conditioning uses merged bounding boxes only (merge_bbox_as_mask),
+# and inline base64 masks routinely overflow max_tokens, truncating the JSON
+# (deterministic parse failure, kills the run). parse_segmentation_masks
+# already synthesises rect masks for bbox-only items.
+MASK_PROMPT = '''Give the 2D bounding boxes for the "{layers}". Output a JSON list where each entry contains the 2D bounding box in the key "box_2d" (as [y0, x0, y1, x1], normalized to 0-1000) and the text label in the key "label". Use descriptive labels. Do not include segmentation masks.'''
 
 additional_colors = [colorname for (colorname, colorcode) in ImageColor.colormap.items()]
 

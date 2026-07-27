@@ -64,11 +64,28 @@ INSTANCE_ID=$(vastai create instance "$OFFER_ID" --image "$DOCKER_IMAGE" \
 [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "null" ] || die "instance creation failed"
 log "instance $INSTANCE_ID created"
 
-destroy() {
-  log "destroying instance $INSTANCE_ID"
-  yes | vastai destroy instance "$INSTANCE_ID" || log "WARNING: destroy failed — check 'vastai show instances' NOW"
+PULLED=0
+pull_outputs() {
+  [ "$PULLED" = 1 ] && return 0
+  [ -n "${SSH_PORT:-}" ] || return 0
+  log "pulling outputs -> $OUTDIR"
+  mkdir -p "$OUTDIR"
+  rsync -az -e "ssh -o StrictHostKeyChecking=no -p $SSH_PORT" \
+    "root@$SSH_HOST:/root/outputs/" "$OUTDIR/" && PULLED=1 || log "WARNING: output pull failed"
 }
-trap destroy EXIT
+
+cleanup() {
+  # Best-effort salvage BEFORE destroy — run 1 crashed mid-run and lost all
+  # frames because outputs were only pulled on the success path.
+  pull_outputs || true
+  log "destroying instance $INSTANCE_ID"
+  # echo (not `yes`): yes gets SIGPIPE when vastai exits -> pipefail reports a
+  # spurious failure even though the destroy succeeded (run 1 false alarm).
+  echo y | vastai destroy instance "$INSTANCE_ID" \
+    && log "instance $INSTANCE_ID destroyed" \
+    || log "WARNING: destroy may have failed — check 'vastai show instances' NOW"
+}
+trap cleanup EXIT
 
 # ---- wait for running -------------------------------------------------------
 log "waiting for instance to boot..."
@@ -117,9 +134,5 @@ python directed_peel.py \
 REMOTE
 
 # ---- pull -------------------------------------------------------------------
-log "pulling outputs -> $OUTDIR"
-mkdir -p "$OUTDIR"
-rsync -az -e "ssh -o StrictHostKeyChecking=no -p $SSH_PORT" \
-  "root@$SSH_HOST:/root/outputs/" "$OUTDIR/"
-
+pull_outputs
 log "done. outputs in $OUTDIR (instance will now be destroyed)"

@@ -35,6 +35,7 @@ Usage (on the GPU box):
 import argparse
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -48,12 +49,11 @@ from inference import (
     load_model,
     create_output_subfolders,
     warp_caption,
-    _get_vlm_response,
     _get_mask_response,
     _generate_next_image,
 )
-from utils.util import load_image, save_image, save_json, setup_logging
-from utils.vlm_util import detect_top_layer, extract_tag_content
+from utils.util import load_image, load_json, load_or_generate, save_image, save_json, setup_logging
+from utils.vlm_util import detect_top_layer, extract_tag_content, DEFAULT_PROMPT
 from utils.image_util import is_pure_white, pad_image
 
 
@@ -64,6 +64,58 @@ Answer whether the image is now a FLAT BASE: only large flat-colour or gradient 
 Small soft shading is acceptable in a flat base. If any eyes, outlines, or decorative details are still visible, it is NOT a flat base.
 
 Respond with your reasoning in <think></think> tags, then exactly YES or NO in <answer></answer> tags."""
+
+
+FLATTEN_CONSTRAINT = """
+
+# CRITICAL CONSTRAINT — flatten phase:
+This peeling run is a FLATTEN pass: only DECORATIVE DETAIL layers may be removed
+(outlines, eyes, facial features, highlights, shadows, patches, patterns,
+decorations). You must NEVER include a body part of the character — arm, hand,
+leg, foot, head, ear, tail, torso, body — as an element to remove, even if it is
+non-occluded. If the only non-occluded elements left are body parts, return an
+empty caption: <caption></caption>."""
+
+BODY_PART_RE = re.compile(
+    r"\b(arms?|hands?|legs?|feet|foot|heads?|tails?|torso|body)\b", re.IGNORECASE
+)
+
+
+def get_flatten_caption(image_vlm: Image.Image, step: int, cfg: Config, output_folders: Dict[str, str], logger) -> Optional[str]:
+    """Flatten-phase top-layer caption with a body-part guard.
+
+    Uses the upstream DEFAULT_PROMPT plus a constraint forbidding articulation
+    parts (run 1 finding: the stacking VLM bundled 'the raised right arm' into a
+    detail peel, destroying the part's clean diff and orphaning its directed
+    peel). Caches to the same vlm_response_{step}.json path as upstream. An
+    empty caption means 'nothing but body parts left' -> treat as flat.
+    """
+    vlm_response_path = os.path.join(output_folders["vlm"], f"vlm_response_{step}.json")
+
+    def generate():
+        raw = detect_top_layer(
+            image_vlm, cfg.vlm_model_name, False,
+            prompt_override=DEFAULT_PROMPT + FLATTEN_CONSTRAINT, logger=logger,
+        )
+        return {
+            "description": extract_tag_content("description", raw),
+            "think": extract_tag_content("think", raw),
+            "caption": extract_tag_content("caption", raw),
+        }
+
+    response = load_or_generate(
+        file_path=vlm_response_path,
+        generate_func=generate,
+        save_func=save_json,
+        load_func=load_json,
+        logger=logger,
+        description=f"flatten VLM response for step {step}",
+    )
+    caption = (response or {}).get("caption") or ""
+    caption = caption.strip()
+    if caption and BODY_PART_RE.search(caption):
+        logger.warning(f"Step {step}: flatten caption mentions a body part despite constraint: {caption!r}")
+    return caption or None
 
 
 def is_flat_base(image_vlm: Image.Image, step: int, cfg: Config, output_folders: Dict[str, str], logger) -> bool:
@@ -105,7 +157,13 @@ def peel_once(
 
     mask_image = None
     if cfg.enable_mask_detection:
-        mask_image = _get_mask_response(image_vlm, caption, step - 1, cfg, output_folders, logger)
+        try:
+            mask_image = _get_mask_response(image_vlm, caption, step - 1, cfg, output_folders, logger)
+        except Exception as e:
+            # A lost mask degrades one peel; a raised exception kills the run
+            # (run 1 died here). Proceed maskless.
+            logger.warning(f"Step {step}: mask detection failed ({e}); proceeding without mask.")
+            mask_image = None
 
     prompt = warp_caption(caption)
     logger.info(f"Step {step}: prompt = {prompt}")
@@ -137,9 +195,9 @@ def run(pipeline, image_path: str, plan: Dict, cfg: Config, logger) -> Dict:
             break
 
         t0 = time.time()
-        caption = _get_vlm_response(image_vlm, step, cfg, output_folders, logger)
+        caption = get_flatten_caption(image_vlm, step, cfg, output_folders, logger)
         if not caption:
-            logger.error(f"Step {step}: no caption from VLM during flatten. Aborting flatten phase.")
+            logger.info(f"Step {step}: flatten VLM returned no caption (only body parts left, or failure). Ending flatten phase.")
             break
 
         step += 1
