@@ -1,0 +1,12 @@
+{
+  "target": "fox",
+  "flatten": { "mode": "auto", "max_steps": 6 },
+  "parts": [
+    { "name": "arm_right_raised", "caption": "the raised arm on the right side of the image" },
+    { "name": "arm_left", "caption": "the arm hanging down on the left side of the image" },
+    { "name": "tail", "caption": "the bushy tail on the lower right side of the image" },
+    { "name": "leg_left", "caption": "the leg on the left side of the image" },
+    { "name": "leg_right", "caption": "the leg on the right side of the image" },
+    { "name": "head", "caption": "the head with ears at the top of the image" }
+  ]
+}
