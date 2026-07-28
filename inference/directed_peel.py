@@ -224,6 +224,49 @@ def verify_peel(
             "had_bbox": det is not None}
 
 
+REMOVAL_CHECK_PROMPT = """You are inspecting a layer-peeling edit on a cartoon character. The image shows BEFORE (left) and AFTER (right) side by side. The edit was asked to REMOVE: "{part}".
+
+Compare the two sides. The element counts as REMOVED only if its shape is gone from the AFTER side (the area may be filled with background or plain fill colour). If the element's shape is still visible on the AFTER side — even recoloured, flattened, or with different shading — it was NOT removed.
+
+Respond with brief reasoning in <think></think> tags, then exactly REMOVED or PRESENT in <answer></answer> tags."""
+
+
+def check_removed(before: Image.Image, after: Image.Image, caption: str, cfg: Config,
+                  output_folders: Dict[str, str], tag: str, logger) -> bool:
+    """Semantic removal gate: before/after montage -> VLM REMOVED/PRESENT.
+
+    Diff metrics count CHANGED pixels, not REMOVED parts, and that gap is not
+    closable with thresholds — validated 9/9 against every known outcome of
+    runs fox-5 + axolotl-1, where every scalar tried (magnitude, bbox
+    coverage, edge persistence) overlapped:
+    - fox tail/legs "accepts" were SHADING peels (part still present, diffs
+      part-shaped) — invisible to diff verify;
+    - axolotl head "accept" was gloss noodle — diff verify false-accepted;
+    - single-image VLM check false-negatives on true removals because FLUX's
+      inpainted fill reads as the part (fox head's cream circle).
+    Runs only on would-be accepts, so it costs one VLM call per accepted part.
+    Conservative on API failure: accept with a warning (diff gates already
+    passed; do not let a VLM outage kill a $1 GPU run).
+    """
+    m = Image.new("RGB", (before.width + after.width, max(before.height, after.height)), "white")
+    m.paste(before.convert("RGB"), (0, 0))
+    m.paste(after.convert("RGB"), (before.width, 0))
+    check_path = os.path.join(output_folders["vlm"], f"removal_check_{tag}.json")
+    try:
+        raw = detect_top_layer(m, cfg.vlm_model_name, False,
+                               prompt_override=REMOVAL_CHECK_PROMPT.format(part=caption), logger=logger)
+        answer = (extract_tag_content("answer", raw) or "").strip().upper()
+        save_json({"answer": answer, "think": extract_tag_content("think", raw)}, check_path)
+        if answer not in ("REMOVED", "PRESENT"):
+            logger.warning(f"  removal-check '{tag}': unparseable answer {answer!r}; accepting with warning")
+            return True
+        logger.info(f"  removal-check '{tag}': {answer}")
+        return answer == "REMOVED"
+    except Exception as e:
+        logger.warning(f"  removal-check '{tag}' failed ({e}); accepting with warning")
+        return True
+
+
 def peel_once(
     pipeline,
     image: Image.Image,
@@ -342,8 +385,13 @@ def run(pipeline, image_path: str, plan: Dict, cfg: Config, logger) -> Dict:
             logger.info(f"  verify: inside={v['inside_px']}px outside={v['outside_px']}px "
                         f"collateral={v['collateral']} -> {'ACCEPT' if v['ok'] else 'REJECT'}")
             if v["ok"]:
-                accepted = (out, v, caption)
-                break
+                v["removed"] = check_removed(image, out, caption, cfg, output_folders,
+                                             f"{name}_a{attempt + 1}", logger)
+                if not v["removed"]:
+                    v["ok"] = False
+                else:
+                    accepted = (out, v, caption)
+                    break
             # keep the reject for post-mortem, bust the cache for the retry
             os.replace(frame_path, os.path.join(output_folders["png"],
                                                 f"layer_{step}_{name}_rejected{attempt + 1}.png"))
@@ -432,6 +480,12 @@ def run_independent(pipeline, image_path: str, plan: Dict, cfg: Config, logger) 
             except Exception as e:
                 logger.warning(f"'{name}': mask detection failed ({e}); maskless.")
         bbox_path = os.path.join(output_folders["mask"], f"bbox_{mask_idx}.png")
+        if os.path.exists(bbox_path) and np.asarray(Image.open(bbox_path).convert("L")).max() == 0:
+            # axolotl run 1: gills_left detection produced an all-black bbox
+            # mask, so verify saw inside=0 on every attempt and the part burned
+            # all its retries on an unwinnable check. Surface it loudly.
+            logger.warning(f"'{name}': detection bbox mask is EMPTY — inside-bbox verify "
+                           f"cannot pass; treat rejects as a DETECTION failure, not peel failure.")
 
         accepted, attempts = None, []
         saved_g = cfg.guidance_scale
@@ -453,8 +507,13 @@ def run_independent(pipeline, image_path: str, plan: Dict, cfg: Config, logger) 
                 logger.info(f"  verify: inside={v['inside_px']}px outside={v['outside_px']}px "
                             f"collateral={v['collateral']} -> {'ACCEPT' if v['ok'] else 'REJECT'}")
                 if v["ok"]:
-                    accepted = (out, v, caption)
-                    break
+                    v["removed"] = check_removed(image_vlm, out, caption, cfg, output_folders,
+                                                f"{name}_a{attempt + 1}", logger)
+                    if not v["removed"]:
+                        v["ok"] = False
+                    else:
+                        accepted = (out, v, caption)
+                        break
         finally:
             cfg.guidance_scale = saved_g
 
