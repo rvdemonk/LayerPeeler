@@ -135,8 +135,16 @@ def main():
     out = run / "parts"
     out.mkdir(exist_ok=True)
 
+    independent = log.get("mode") == "independent"
+
+    def part_frame(rec):
+        """After-image for a part: chained = numbered frame; independent = part file."""
+        img = cv2.imread(str(frames_dir / rec["file"]))
+        assert img is not None, f"missing {rec['file']}"
+        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
     # ---- part spans -------------------------------------------------------
-    spans = {p["name"]: (p["frame_before"], p["frame_after"]) for p in log["parts"]}
+    spans = {} if independent else {p["name"]: (p["frame_before"], p["frame_after"]) for p in log["parts"]}
     # Detection bboxes belong to the part NAME (the VLM located the named part
     # when its peel was requested), even if --remap moves the pixel change to a
     # later transition. Index them before remapping.
@@ -151,7 +159,7 @@ def main():
         print(f"skipped {s}")
 
     flat_frame = log["flat_frame"]
-    final_frame = log["final_frame"]
+    final_frame = log.get("final_frame")
     source = cv2.cvtColor(cv2.imread(args.source), cv2.COLOR_BGR2RGB) if args.source else frame(0)
     if source.shape[:2] != frame(0).shape[:2]:
         source = cv2.resize(source, frame(0).shape[:2][::-1])
@@ -187,24 +195,12 @@ def main():
         print(f"  {name}: area {area}px bbox {bbox} svg={'ok' if traced else 'FAIL'}")
         return rec
 
-    # ---- base (bottom) ----------------------------------------------------
-    print("base (residual):")
-    base = frame(final_frame)
-    body_mask = diff_mask(np.full_like(base, 255), base)  # non-white = residual body
-    emit("base", cut_part(base, body_mask), 0, [final_frame])
-
-    # ---- directed parts (z above base, in reverse peel order) -------------
-    # The generator perturbs regions OUTSIDE the named part (colour drift,
-    # incidental morphing), so a naive consecutive-frame diff cross-contaminates
-    # parts (run-2 fox: arm_left's diff was mostly tail underside). Constrain
-    # each part's diff to its own VLM detection bbox (layer_mask/bbox_<b>.png,
-    # dilated for slack) when available.
     mask_dir = run / "layer_mask"
-    print("directed parts:")
-    z = 1
-    for name, (b, a) in reversed(list(spans.items())):
-        m = diff_mask(frame(b), frame(a))
-        bbox_file = mask_dir / f"bbox_{det_index.get(name, b)}.png"
+
+    def constrain(m, bbox_file, name):
+        """Detection-bbox constraint + largest-component filter (shape-aware,
+        not box-aware: rectangular constraint alone let a tail-tip chunk
+        survive inside the arm's bbox and wave with it)."""
         if bbox_file.exists():
             det = cv2.imread(str(bbox_file), cv2.IMREAD_GRAYSCALE)
             det = cv2.resize(det, m.shape[::-1], interpolation=cv2.INTER_NEAREST)
@@ -212,10 +208,6 @@ def main():
             outside = int(((m > 0) & (det == 0)).sum())
             m = cv2.bitwise_and(m, det)
             print(f"  {name}: constrained to detection bbox ({outside}px of diff fell outside)")
-        # The bbox is rectangular, so collateral fragments of OTHER parts can
-        # survive inside it (run-2 arm kept a tail-tip chunk that then waved
-        # with the arm). A rigid part is one blob: keep only components ≥25%
-        # the size of the largest.
         ncc, cc, stats, _ = cv2.connectedComponentsWithStats((m > 0).astype(np.uint8))
         if ncc > 2:
             areas = stats[1:, cv2.CC_STAT_AREA]
@@ -224,8 +216,32 @@ def main():
             if dropped:
                 m = np.where(np.isin(cc, keep), m, 0).astype(np.uint8)
                 print(f"  {name}: dropped {dropped}px of collateral fragments ({ncc-1-len(keep)} components)")
-        emit(name, cut_part(frame(b), m), z, [b, a])
-        z += 1
+        return m
+
+    # ---- base (bottom) ----------------------------------------------------
+    print("base (residual):")
+    base = part_frame({"file": log["base_file"]}) if independent else frame(final_frame)
+    body_mask = diff_mask(np.full_like(base, 255), base)  # non-white = residual body
+    emit("base", cut_part(base, body_mask), 0, [flat_frame if independent else final_frame])
+
+    # ---- directed parts (z above base) ------------------------------------
+    print("directed parts:")
+    z = 1
+    if independent:
+        # every part diffs against the SAME flat base; after-image is its own file
+        flat_img = frame(flat_frame)
+        for rec in reversed(log["parts"]):
+            name = rec["name"]
+            m = diff_mask(flat_img, part_frame(rec))
+            m = constrain(m, mask_dir / f"bbox_{rec['mask_idx']}.png", name)
+            emit(name, cut_part(flat_img, m), z, [flat_frame, rec["file"]])
+            z += 1
+    else:
+        for name, (b, a) in reversed(list(spans.items())):
+            m = diff_mask(frame(b), frame(a))
+            m = constrain(m, mask_dir / f"bbox_{det_index.get(name, b)}.png", name)
+            emit(name, cut_part(frame(b), m), z, [b, a])
+            z += 1
 
     # ---- details overlay (topmost): everything the flatten phase removed --
     print("details overlay:")

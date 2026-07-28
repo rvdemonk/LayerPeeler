@@ -209,19 +209,12 @@ def peel_once(
     return _generate_next_image(pipeline, image_flux, mask_image, prompt, step, cfg, output_folders, logger)
 
 
-def run(pipeline, image_path: str, plan: Dict, cfg: Config, logger) -> Dict:
-    target = plan.get("target") or Path(image_path).stem
-    output_folders = create_output_subfolders(cfg.output_folder, target)
-    log_path = os.path.join(output_folders["target"], "peel_log.json")
-
-    peel_log: List[Dict] = []
-    run_start = time.time()
-
-    image = load_image(image_path)
-    save_image(image, os.path.join(output_folders["png"], "layer_0.png"))
+def flatten_phase(pipeline, image: Image.Image, plan: Dict, cfg: Config,
+                  output_folders: Dict[str, str], peel_log: List[Dict],
+                  log_path: str, logger) -> (Image.Image, int):
+    """Standard VLM-guided detail peeling until the base is flat. Returns
+    (flat image, flat frame index). Appends to peel_log in place."""
     step = 0
-
-    # ---- Phase 1: flatten -------------------------------------------------
     flatten = plan.get("flatten", {"mode": "auto", "max_steps": 6})
     mode = flatten.get("mode", "auto")
     max_flatten = flatten.get("steps") if mode == "steps" else flatten.get("max_steps", 6)
@@ -253,8 +246,24 @@ def run(pipeline, image_path: str, plan: Dict, cfg: Config, logger) -> Dict:
         })
         save_json({"log": peel_log}, log_path)  # checkpoint
 
-    flat_step = step
-    logger.info(f"Flatten phase done at frame {flat_step}.")
+    logger.info(f"Flatten phase done at frame {step}.")
+    return image, step
+
+
+def run(pipeline, image_path: str, plan: Dict, cfg: Config, logger) -> Dict:
+    target = plan.get("target") or Path(image_path).stem
+    output_folders = create_output_subfolders(cfg.output_folder, target)
+    log_path = os.path.join(output_folders["target"], "peel_log.json")
+
+    peel_log: List[Dict] = []
+    run_start = time.time()
+
+    image = load_image(image_path)
+    save_image(image, os.path.join(output_folders["png"], "layer_0.png"))
+
+    image, flat_step = flatten_phase(pipeline, image, plan, cfg, output_folders,
+                                     peel_log, log_path, logger)
+    step = flat_step
 
     # ---- Phase 2: directed peels, verified with retry ---------------------
     parts_out = []
@@ -328,6 +337,123 @@ def run(pipeline, image_path: str, plan: Dict, cfg: Config, logger) -> Dict:
     }
     save_json(summary, log_path)
     logger.info(f"Done: {step} frames, {len(parts_out)}/{len(plan.get('parts', []))} directed parts. Log: {log_path}")
+    return summary
+
+
+def run_independent(pipeline, image_path: str, plan: Dict, cfg: Config, logger) -> Dict:
+    """Independent-peel mode (bench-validated, run-4 architecture).
+
+    Every part peels from the SAME flat base — chained peels proved
+    sequence-sensitive (run 3: 1/5 off a mutated base; bench: same parts 11/18
+    off the flat base, with every miss explained). Per part: mask once,
+    verify-retry across seeds/alt-captions, optional per-part guidance
+    (bench: head wants 6.5 to take the cream chin). The residual body is
+    COMPOSITED locally: each accepted part's changed region is filled from its
+    own peel's inpainting — no chaining, retry-friendly, parallelisable.
+    """
+    target = plan.get("target") or Path(image_path).stem
+    output_folders = create_output_subfolders(cfg.output_folder, target)
+    log_path = os.path.join(output_folders["target"], "peel_log.json")
+
+    peel_log: List[Dict] = []
+    run_start = time.time()
+
+    image = load_image(image_path)
+    save_image(image, os.path.join(output_folders["png"], "layer_0.png"))
+
+    flat, flat_step = flatten_phase(pipeline, image, plan, cfg, output_folders,
+                                    peel_log, log_path, logger)
+    save_image(flat, os.path.join(output_folders["png"], "flat_base.png"))
+
+    image_vlm = flat.resize((cfg.vlm_resolution, cfg.vlm_resolution))
+    image_flux = pad_image(image_vlm, cfg.flux_width, cfg.flux_height, logger=logger)
+    flat_np = np.asarray(image_vlm.convert("RGB"), dtype=int)
+    residual = np.asarray(image_vlm.convert("RGB")).copy()
+
+    parts_out = []
+    for i, part in enumerate(plan.get("parts", [])):
+        name = part["name"]
+        captions = [part["caption"]] + part.get("alt_captions", [])
+        guidance = part.get("guidance", cfg.guidance_scale)
+        mask_idx = 900 + i
+        t0 = time.time()
+
+        mask_image = None
+        if cfg.enable_mask_detection:
+            try:
+                mask_image = _get_mask_response(image_vlm, captions[0], mask_idx, cfg, output_folders, logger)
+            except Exception as e:
+                logger.warning(f"'{name}': mask detection failed ({e}); maskless.")
+        bbox_path = os.path.join(output_folders["mask"], f"bbox_{mask_idx}.png")
+
+        accepted, attempts = None, []
+        saved_g = cfg.guidance_scale
+        cfg.guidance_scale = guidance
+        try:
+            for attempt in range(cfg.max_attempts):
+                caption = captions[min(attempt, len(captions) - 1)]
+                set_seed(cfg.seed + attempt * 1009)
+                logger.info(f"Independent peel '{name}' attempt {attempt + 1}/{cfg.max_attempts} "
+                            f"(g={guidance}): {caption!r}")
+                out = _generate_next_image(pipeline, image_flux, mask_image, warp_caption(caption),
+                                           f"part_{name}_a{attempt + 1}", cfg, output_folders, logger)
+                if out is None:
+                    attempts.append({"attempt": attempt + 1, "caption": caption, "generated": False})
+                    continue
+                v = verify_peel(image_vlm, out, bbox_path, cfg.min_part_px, cfg.max_collateral)
+                v.update({"attempt": attempt + 1, "caption": caption, "generated": True})
+                attempts.append(v)
+                logger.info(f"  verify: inside={v['inside_px']}px outside={v['outside_px']}px "
+                            f"collateral={v['collateral']} -> {'ACCEPT' if v['ok'] else 'REJECT'}")
+                if v["ok"]:
+                    accepted = (out, v, caption)
+                    break
+        finally:
+            cfg.guidance_scale = saved_g
+
+        if accepted is None:
+            logger.error(f"Independent peel '{name}': all {cfg.max_attempts} attempts rejected; "
+                         f"part stays in base.")
+            peel_log.append({"phase": "independent", "name": name, "caption": captions[0],
+                             "failed": True, "attempts": attempts})
+            save_json({"log": peel_log}, log_path)
+            continue
+
+        out, verdict, used_caption = accepted
+        part_file = f"part_{name}.png"
+        save_image(out, os.path.join(output_folders["png"], part_file))
+        # composite this part's region (vs flat) from its own inpainting
+        o = np.asarray(out.convert("RGB"))
+        changed = np.abs(flat_np - o.astype(int)).sum(axis=2) > 30
+        residual[changed] = o[changed]
+
+        rec = {"phase": "independent", "name": name, "caption": used_caption,
+               "file": part_file, "mask_idx": mask_idx, "guidance": guidance,
+               "seconds": round(time.time() - t0, 1), "verify": verdict, "attempts": attempts}
+        peel_log.append(rec)
+        parts_out.append(rec)
+        save_json({"log": peel_log}, log_path)
+
+    save_image(Image.fromarray(residual), os.path.join(output_folders["png"], "base_residual.png"))
+
+    summary = {
+        "mode": "independent",
+        "target": target,
+        "flat_frame": flat_step,
+        "base_file": "base_residual.png",
+        "parts": parts_out,
+        "log": peel_log,
+        "economics": {
+            "wall_seconds": round(time.time() - run_start, 1),
+            "flatten_peels": flat_step,
+            "parts_accepted": len(parts_out),
+            "parts_requested": len(plan.get("parts", [])),
+            "attempts_total": sum(len(p.get("attempts", [])) for p in peel_log if p.get("phase") == "independent"),
+        },
+    }
+    save_json(summary, log_path)
+    logger.info(f"Done (independent): {len(parts_out)}/{len(plan.get('parts', []))} parts accepted. "
+                f"Log: {log_path}")
     return summary
 
 
@@ -406,8 +532,12 @@ def main():
     logger.info("===== Loading Model and LoRA weights =====")
     pipeline = load_model(cfg.pretrained_model_name_or_path, cfg.lora_path, cfg.lora_name)
 
-    logger.info("===== Directed peel run =====")
-    run(pipeline, args.image, plan, cfg, logger)
+    if plan.get("mode") == "independent":
+        logger.info("===== Independent peel run =====")
+        run_independent(pipeline, args.image, plan, cfg, logger)
+    else:
+        logger.info("===== Directed peel run (chained) =====")
+        run(pipeline, args.image, plan, cfg, logger)
 
 
 if __name__ == "__main__":
