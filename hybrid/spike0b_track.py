@@ -83,13 +83,20 @@ def main():
         queries.append(np.hstack([np.zeros((len(p0), 1)), p0]))
     q = torch.from_numpy(np.concatenate(queries)).float()[None].to(args.device)
 
-    print(f"tracking {off} points over {T} frames ({args.device})...")
-    model = torch.hub.load("facebookresearch/co-tracker", "cotracker3_offline")
-    model = model.to(args.device).eval()
-    with torch.no_grad():
-        tracks, vis = model(video, queries=q)
-    tracks = tracks[0].cpu().numpy()   # T N 2
-    vis = vis[0].cpu().numpy()         # T N
+    cache = vdir / "tracks_cache.npz"
+    if cache.exists():
+        z = np.load(cache)
+        tracks, vis = z["tracks"], z["vis"]
+        print(f"loaded cached tracks {tracks.shape}")
+    else:
+        print(f"tracking {off} points over {T} frames ({args.device})...")
+        model = torch.hub.load("facebookresearch/co-tracker", "cotracker3_offline")
+        model = model.to(args.device).eval()
+        with torch.no_grad():
+            tracks, vis = model(video, queries=q)
+        tracks = tracks[0].cpu().numpy()   # T N 2
+        vis = vis[0].cpu().numpy()         # T N
+        np.savez_compressed(cache, tracks=tracks, vis=vis)
 
     report = {}
     for part in Z_ORDER:
@@ -108,7 +115,27 @@ def main():
             keep = vis[t, sl] > 0.5
             if keep.sum() < 8:
                 keep = np.ones(len(p0), bool)
-            s, R, tr = umeyama_similarity(p0[keep], tracks[t, sl][keep])
+            src, dst = p0[keep], tracks[t, sl][keep]
+            # RANSAC, ABSOLUTE inlier threshold. IRLS with MAD scaling was a
+            # measured no-op here: with a majority-bad point set (flat-fill
+            # interiors lock to the nearest edge; arm_right median err 8.9px)
+            # the robust scale inflates until nothing is rejected. RANSAC
+            # finds the largest self-consistent subset regardless of its
+            # share; 2px absolute tolerance ~ the tracker's good-point noise.
+            rng_r = np.random.default_rng(t)
+            best_inl, TOL = None, 2.0
+            for _ in range(64):
+                ij = rng_r.choice(len(src), 2, replace=False)
+                if np.linalg.norm(src[ij[0]] - src[ij[1]]) < 8:
+                    continue
+                s, R, tr = umeyama_similarity(src[ij], dst[ij])
+                r = np.sqrt((((s * (R @ src.T)).T + tr - dst) ** 2).sum(1))
+                inl = r < TOL
+                if best_inl is None or inl.sum() > best_inl.sum():
+                    best_inl = inl
+            if best_inl is not None and best_inl.sum() >= 6:
+                src, dst = src[best_inl], dst[best_inl]
+            s, R, tr = umeyama_similarity(src, dst)
             thetas.append(np.arctan2(R[1, 0], R[0, 0]))
             scales.append(s); txs.append(tr[0]); tys.append(tr[1])
         thetas = fourier_smooth(np.array(thetas), args.harmonics)
