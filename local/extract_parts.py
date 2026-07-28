@@ -66,10 +66,45 @@ def cut_part(before: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return rgba
 
 
+def source_palette(source: np.ndarray, min_frac: float = 0.002) -> np.ndarray:
+    """Dominant flat colours of the source (mascots are flat-art: few colours +
+    antialias edge blends, which fall below min_frac and are excluded)."""
+    px = source.reshape(-1, 3)
+    colours, counts = np.unique(px, axis=0, return_counts=True)
+    keep = counts >= min_frac * len(px)
+    pal = colours[keep]
+    print(f"palette: {len(pal)} colours (of {len(colours)} unique)")
+    return pal
+
+
+def snap_svg_fills(svg_path: Path, palette: np.ndarray) -> int:
+    """Replace each vtracer fill colour with the nearest source-palette colour.
+
+    Post-trace, not pre-trace: snapping PIXELS before tracing destroys the
+    antialiasing vtracer needs (outlines thin to nothing, speckle-filtered away)
+    and hard-misassigns blends (drifted cream went to white). Snapping the few
+    traced FILL colours preserves geometry exactly and only corrects drift."""
+    import re as _re
+    svg = svg_path.read_text()
+    fills = set(_re.findall(r'fill="(#[0-9A-Fa-f]{6})"', svg))
+    n = 0
+    for f in fills:
+        rgb = np.array([int(f[i:i + 2], 16) for i in (1, 3, 5)])
+        d = np.abs(palette.astype(int) - rgb).sum(axis=1)
+        snapped = palette[d.argmin()]
+        s = "#{:02X}{:02X}{:02X}".format(*snapped)
+        if s.lower() != f.lower():
+            svg = svg.replace(f'fill="{f}"', f'fill="{s}"')
+            n += 1
+    svg_path.write_text(svg)
+    return n
+
+
 def vtrace(png_path: Path, svg_path: Path) -> bool:
     r = subprocess.run(
         ["vtracer", "--input", str(png_path), "--output", str(svg_path),
-         "--mode", "spline", "--filter_speckle", "4"],
+         "--mode", "spline", "--filter_speckle", "6", "-p", "4",
+         "--path_precision", "0", "--corner_threshold", "60", "--segment_length", "5"],
         capture_output=True, text=True,
     )
     if r.returncode != 0:
@@ -84,6 +119,8 @@ def main():
     ap.add_argument("--remap", action="append", default=[],
                     help="name=before:after — override a part's frame span")
     ap.add_argument("--skip", action="append", default=[], help="part name to skip")
+    ap.add_argument("--palette-snap", action="store_true",
+                    help="snap part colours to the source palette (kills generator drift)")
     args = ap.parse_args()
 
     run = Path(args.run_folder)
@@ -120,6 +157,7 @@ def main():
         source = cv2.resize(source, frame(0).shape[:2][::-1])
 
     registry = []
+    palette = source_palette(source) if args.palette_snap else None
 
     def emit(name, rgba, z, frames_used):
         mask = rgba[:, :, 3]
@@ -133,6 +171,13 @@ def main():
         cv2.imwrite(str(png), cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
         svg = out / f"{name}.svg"
         traced = vtrace(png, svg)
+        # Snap only parts cut from GENERATED frames — anything cut from frame 0
+        # is source pixels with no drift, and snapping its legitimate antialias
+        # blends corrupts it (black outlines went brown).
+        if traced and palette is not None and frames_used[0] != 0:
+            n = snap_svg_fills(svg, palette)
+            if n:
+                print(f"  {name}: snapped {n} drifted fill colours to source palette")
         rec = {
             "name": name, "z": z, "bbox": bbox,
             "centroid": [float(xs.mean()), float(ys.mean())],
