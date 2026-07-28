@@ -1,0 +1,24 @@
+{
+  "target": "fox",
+  "mode": "independent",
+  "flatten": { "mode": "auto", "max_steps": 6 },
+  "parts": [
+    {
+      "name": "arm_right_raised",
+      "caption": "the raised arm on the right side of the image"
+    },
+    {
+      "name": "tail",
+      "caption": "the bushy tail on the lower right side of the image"
+    },
+    {
+      "name": "legs",
+      "caption": "the two legs at the bottom of the image"
+    },
+    {
+      "name": "head",
+      "caption": "the head with ears at the top of the image",
+      "alt_captions": ["the entire head including the ears, face and muzzle at the top of the image"]
+    }
+  ]
+}

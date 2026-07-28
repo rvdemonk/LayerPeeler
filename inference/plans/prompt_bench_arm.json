@@ -1,0 +1,37 @@
+{
+  "seeds": [42, 1051],
+  "cases": [
+    {
+      "name": "fox_arm",
+      "base": "../out/fox_run7/fox/layer_png/flat_base.png",
+      "detect": "the raised arm on the right side of the image",
+      "gate_part": "the raised arm on the right side of the image",
+      "prompts": [
+        {
+          "id": "baseline",
+          "text": "Remove the raised arm on the right side of the image. Fill the revealed area with the character's body and the white background. Do not add any shadows or new elements. Do not change anything else in the image."
+        },
+        {
+          "id": "no_replace",
+          "text": "Erase the raised arm on the right side of the image completely. The character must have only one arm afterward — do not draw a new or replacement arm anywhere. Fill the revealed area with the character's body and the white background. Do not change anything else in the image."
+        },
+        {
+          "id": "negative_space",
+          "text": "Show this exact character without its raised right arm. It has only its left arm. Keep everything else identical: same pose, same tail, same legs, same colors, same position. Where the raised arm was, show the body's smooth edge and the white background."
+        },
+        {
+          "id": "layer_frame",
+          "text": "Delete the raised arm layer on the right side of the image. Reveal the character's body edge and the white background that were behind it. Keep every other part exactly as it is, in its exact position. Do not add anything."
+        },
+        {
+          "id": "minimal",
+          "text": "Remove the raised right arm."
+        },
+        {
+          "id": "declarative",
+          "text": "The character's raised right arm has been removed. The right side of the body shows a smooth, complete body contour where the arm used to attach. The character now has exactly one arm, on the left. Nothing else differs from the original image."
+        }
+      ]
+    }
+  ]
+}

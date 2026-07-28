@@ -370,7 +370,14 @@ class SegmentationMask:
 def merge_bbox_as_mask(masks: list[SegmentationMask], width: int, height: int) -> np.array:
     merged_mask = np.zeros((height, width), dtype=np.uint8)
     for mask in masks:
-        merged_mask[mask.y0:mask.y1, mask.x0:mask.x1] = 255
+        # Clamp: expand_bbox() can push coords negative for parts touching the
+        # image edge, and a negative start WRAPS in numpy slicing ([-12:141]
+        # reads as [500:141] = empty). This silently produced empty masks for
+        # edge-hugging parts (axolotl gills_left, runs 1-3) and was logged as
+        # a detection failure — Gemini's boxes were fine all along.
+        y0, x0 = max(0, mask.y0), max(0, mask.x0)
+        y1, x1 = min(height, mask.y1), min(width, mask.x1)
+        merged_mask[y0:y1, x0:x1] = 255
     return merged_mask
 
 
