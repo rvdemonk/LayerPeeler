@@ -84,9 +84,14 @@ def fit_variant(variant, args):
         mask = cv2.imread(str(vdir / "masks" / f"{part}.png"), cv2.IMREAD_UNCHANGED)
         p0 = sample_points(mask, args.pts)
         p0h = np.hstack([p0, np.ones((len(p0), 1))])
+        # RELATIVE GT: masks/frame0 are rendered WITH the t=0 transform baked
+        # in (sin(phase) != 0 for arms/head), so a frame-0 pixel truly moves
+        # by M_t @ inv(M_0). Scoring against absolute M_t was the frame-0
+        # reference bug that inflated spike0b's falsification table.
+        M0i = np.linalg.inv(np.array(gt["0"][part]))
         thetas, scales, txs, tys, res_raw = [], [], [], [], []
         for t in range(T):
-            M = np.array(gt[str(t)][part])
+            M = np.array(gt[str(t)][part]) @ M0i
             pt = (M @ p0h.T).T[:, :2]
             pt_noisy = pt + rng.normal(0, args.noise, pt.shape)
             s, R, tr = umeyama_similarity(p0, pt_noisy)
@@ -103,7 +108,7 @@ def fit_variant(variant, args):
         # residual of the SMOOTHED similarity vs CLEAN GT positions
         res = []
         for t in range(T):
-            M = np.array(gt[str(t)][part])
+            M = np.array(gt[str(t)][part]) @ M0i
             pt = (M @ p0h.T).T[:, :2]
             R = np.array([[np.cos(thetas[t]), -np.sin(thetas[t])],
                           [np.sin(thetas[t]), np.cos(thetas[t])]])
@@ -130,7 +135,7 @@ def dense_anim(values, dur):
     return anim(list(enumerate(values)) + [(dur, values[0])])
 
 
-def emit_lottie(variant, curves, T):
+def emit_lottie(variant, curves, T, name="dino_fit.json"):
     vdir = OUT / variant
     assets, layers = [], []
     import base64, io
@@ -173,7 +178,7 @@ def emit_lottie(variant, curves, T):
            "layers": layers}
     ldir = vdir / "lottie"
     ldir.mkdir(exist_ok=True)
-    p = ldir / "dino_fit.json"
+    p = ldir / name
     p.write_text(json.dumps(doc, separators=(",", ":")))
     return p
 

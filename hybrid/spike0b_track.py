@@ -103,10 +103,15 @@ def main():
         sl = part_slices[part]
         p0 = p0_all[part]
         p0h = np.hstack([p0, np.ones((len(p0), 1))])
+        # RELATIVE GT (M_t @ inv(M_0)): frame 0 and masks have the t=0
+        # transform baked in — scoring vs absolute M_t was a frame-0
+        # reference bug (at t=0 the tracker is exact yet the old metric
+        # charged arm_right 10.3px). Corrected 2026-07-29.
+        M0i = np.linalg.inv(np.array(gt["0"][part]))
         # tracker error vs GT positions (before any fitting)
         terr = []
         for t in range(T):
-            gt_pt = (np.array(gt[str(t)][part]) @ p0h.T).T[:, :2]
+            gt_pt = ((np.array(gt[str(t)][part]) @ M0i) @ p0h.T).T[:, :2]
             terr.append(np.sqrt(((tracks[t, sl] - gt_pt) ** 2).sum(1)))
         terr = np.array(terr)  # T N
         # fit from tracks (visibility-weighted: drop low-vis points per frame)
@@ -144,7 +149,7 @@ def main():
         tys = fourier_smooth(np.array(tys), args.harmonics)
         res, rot_err = [], []
         for t in range(T):
-            M = np.array(gt[str(t)][part])
+            M = np.array(gt[str(t)][part]) @ M0i
             gt_pt = (M @ p0h.T).T[:, :2]
             R = np.array([[np.cos(thetas[t]), -np.sin(thetas[t])],
                           [np.sin(thetas[t]), np.cos(thetas[t])]])
