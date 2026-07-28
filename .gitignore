@@ -156,3 +156,6 @@ cython_debug/
 outputs
 wandb
 PhotoDoodle_Pretrain
+# heavy run artifacts + local venv (repo convention: code+plans versioned, outputs not)
+out/
+.venv-hybrid/
