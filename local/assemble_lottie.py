@@ -156,6 +156,93 @@ def layer(ind, name, shapes, anchor, dur, parent=None):
     return L
 
 
+# ------------------------------------------------------------------ face rig
+
+def group_bbox(g):
+    xs, ys = [], []
+    for it in g["it"]:
+        if it["ty"] == "sh":
+            for x, y in it["ks"]["k"]["v"]:
+                xs.append(x); ys.append(y)
+    return (min(xs), min(ys), max(xs), max(ys)) if xs else None
+
+
+def group_fill(g):
+    for it in g["it"]:
+        if it["ty"] == "fl":
+            return it["c"]["k"][:3]
+    return [0, 0, 0]
+
+
+def split_eye_groups(head_det_groups, head_bbox=None):
+    """Pull the eye shapes (dark discs + their light highlights) out of the
+    head's detail groups so they can live on their own blinkable layer.
+
+    Geometry policy holds: shapes are untouched vtracer traces; only which
+    LAYER they ride changes. Eyes are found structurally — the two compact
+    dark fills at similar height (the nose is dark but sits alone, lower and
+    central; ear inners are light; outline stretches are huge) — and any
+    light group whose centre falls inside an eye bbox joins as a highlight.
+    Returns (eye_groups, remaining_groups, eyes_bbox) — eyes_bbox None if no
+    pair was found (then no eyes layer is built and nothing is lost)."""
+    cands = []
+    for g in head_det_groups:
+        bb = group_bbox(g)
+        if bb is None:
+            continue
+        w, h = bb[2] - bb[0], bb[3] - bb[1]
+        cy = (bb[1] + bb[3]) / 2
+        if head_bbox and cy < (head_bbox[1] + head_bbox[3]) / 2:
+            continue  # eyes sit in the LOWER half of the head; crown/ear
+            # outline fragments (dark, eye-sized at higher trace precision)
+            # live in the upper half and once paired as false eyes
+        lum = sum(group_fill(g)) / 3
+        if lum < 0.35 and 6 <= w <= 80 and 6 <= h <= 80:
+            area = max(poly_area([{"v": v} for v in it["ks"]["k"]["v"]])
+                       for it in g["it"] if it["ty"] == "sh")
+            cands.append((g, bb, area))
+    best = None
+    for i in range(len(cands)):
+        for j in range(i + 1, len(cands)):
+            (ga, ba, aa), (gb, bb2, ab) = cands[i], cands[j]
+            cya, cyb = (ba[1] + ba[3]) / 2, (bb2[1] + bb2[3]) / 2
+            cxa, cxb = (ba[0] + ba[2]) / 2, (bb2[0] + bb2[2]) / 2
+            if abs(cya - cyb) < 18 and abs(cxa - cxb) > 25 and max(aa, ab) / max(min(aa, ab), 1) < 3:
+                # eyes are the LARGEST matched pair (outline nicks are small)
+                score = aa + ab - 2 * abs(cya - cyb)
+                if best is None or score > best[0]:
+                    best = (score, (ga, ba), (gb, bb2))
+    if not best:
+        return [], head_det_groups, None
+    eyes = [best[1][0], best[2][0]]
+    ebbs = [best[1][1], best[2][1]]
+    for g in head_det_groups:
+        if g in eyes:
+            continue
+        bb = group_bbox(g)
+        if bb is None:
+            continue
+        cx, cy = (bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2
+        for ex0, ey0, ex1, ey1 in ebbs:
+            if ex0 - 4 <= cx <= ex1 + 4 and ey0 - 4 <= cy <= ey1 + 4:
+                eyes.append(g)
+                break
+    remaining = [g for g in head_det_groups if g not in eyes]
+    x0 = min(b[0] for b in ebbs); y0 = min(b[1] for b in ebbs)
+    x1 = max(b[2] for b in ebbs); y1 = max(b[3] for b in ebbs)
+    return eyes, remaining, (x0, y0, x1, y1)
+
+
+def blink(dur, at, depth=12):
+    """Scale-Y squash keyframes for the eyes layer: closed over ~4 frames.
+    Anchor sits at the eyes' vertical centre so lids meet in the middle."""
+    keys = [(0, [100, 100, 100])]
+    for t in at:
+        keys += [(t, [100, 100, 100]), (t + 2, [100, depth, 100]), (t + 4, [100, 100, 100])]
+    keys.append((dur, [100, 100, 100]))
+    return anim(keys)
+
+
 # ------------------------------------------------------------------ pivots
 
 def pivot_for(name, bbox, base_centroid):
@@ -210,6 +297,16 @@ def main():
     n_comp, comp = cv2.connectedComponents((det_rgba[:, :, 3] > 0).astype(np.uint8))
     owner_idx = np.zeros(comp.shape, dtype=np.int32)
     pixel_nearest = np.argmin(np.stack(dists), axis=0)
+    # Specificity override: where several parts' raw alphas cover a pixel
+    # (distance 0 in more than one), the SMALLEST part wins. Run 5: the base
+    # residual keeps a FLUX-filled blob where the head was, so eye pixels tied
+    # at distance 0 between base and head and argmin's list order sent the
+    # whole face to base — where the opaque head layer then painted over it.
+    # A feature belongs to the most local part that covers it.
+    areas = [int((cv2.imread(str(parts_dir / f"{n}.png"), cv2.IMREAD_UNCHANGED)[:, :, 3] > 0).sum())
+             for n in owners]
+    for k in sorted(range(len(owners)), key=lambda k: -areas[k]):
+        pixel_nearest[dists[k] == 0] = k
     for c in range(1, n_comp):
         cmask = comp == c
         overlaps = [int(a[cmask].sum()) for a in alphas]
@@ -229,12 +326,26 @@ def main():
     for k, name in enumerate(owners):
         sub = det_rgba.copy()
         sub[:, :, 3] = np.where((det_rgba[:, :, 3] > 0) & (owner_idx == k), det_rgba[:, :, 3], 0)
+        # Despeckle before tracing: 3x3 morphological open shaves the drift-
+        # speckle tendrils, then small residual components are dropped. Run 5:
+        # without this, vtracer's 4-bit colour clustering seeded on the speck
+        # halo and merged crown outline + right eye + speckle into a dark-brown
+        # cheek blob — a ~38px shave flips the clustering back to clean. Real
+        # features (eye highlight ~30px+, thick outlines) survive both steps.
+        amask = cv2.morphologyEx((sub[:, :, 3] > 0).astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        nsub, csub, stats, _ = cv2.connectedComponentsWithStats(amask, connectivity=8)
+        keep = np.isin(csub, [i for i in range(1, nsub) if stats[i, cv2.CC_STAT_AREA] >= 25])
+        sub[:, :, 3] = np.where(keep, sub[:, :, 3], 0)
         if (sub[:, :, 3] > 0).sum() < 50:
             det_groups[name] = []
             continue
         png = parts_dir / f"details_{name}.png"
         cv2.imwrite(str(png), cv2.cvtColor(sub, cv2.COLOR_RGBA2BGRA))
         svg = parts_dir / f"details_{name}.svg"
+        # NB: keep -p 4. 6-bit colour precision looked like the blob fix but
+        # fragments the speckle-heavy overlays into dozens of colour groups
+        # (weight 81 -> 131-215 KB) and spawns eye-sized dark fragments that
+        # break eye pairing. The morphological open above is the real fix.
         subprocess.run(["vtracer", "--input", str(png), "--output", str(svg),
                         "--mode", "spline", "--filter_speckle", "6", "-p", "4",
                         "--path_precision", "0", "--corner_threshold", "60",
@@ -247,9 +358,22 @@ def main():
     ind = 0
     name_to_ind = {}
     # top of stack first: riggable parts by z desc, then base
+    eyes_pending = None  # (eye_groups, eyes_bbox) once the head layer exists
     for rec in sorted(riggable, key=lambda r: -r["z"]):
         ind += 1
-        shapes = det_groups.get(rec["name"], []) + svg_to_groups(parts_dir / f"{rec['name']}.svg", rec["name"])
+        dets = det_groups.get(rec["name"], [])
+        if rec["name"] == "head" and dets:
+            eye_groups, dets, eyes_bbox = split_eye_groups(dets, rec["bbox"])
+            if eyes_bbox:
+                # eyes layer goes ABOVE the head (earlier in the list), parented
+                # to it so head bobs carry the eyes; its own scale-Y is the blink
+                eye_ind, ind = ind, ind + 1
+                ecx = (eyes_bbox[0] + eyes_bbox[2]) / 2
+                ecy = (eyes_bbox[1] + eyes_bbox[3]) / 2
+                layers.append(layer(eye_ind, "eyes", eye_groups, (ecx, ecy), DUR, parent=ind))
+                name_to_ind["eyes"] = eye_ind
+                print(f"eyes layer: {len(eye_groups)} groups, bbox {[round(v) for v in eyes_bbox]}")
+        shapes = dets + svg_to_groups(parts_dir / f"{rec['name']}.svg", rec["name"])
         piv = pivot_for(rec["name"], rec["bbox"], base_c)
         layers.append(layer(ind, rec["name"], shapes, piv, DUR))
         name_to_ind[rec["name"]] = ind
@@ -276,7 +400,7 @@ def main():
 
     variants = {}
 
-    # idle: breathe + head bob + tail sway
+    # idle: breathe + head bob + tail sway + blink
     idle = doc(f"{target}-idle-extracted")
     def dl(d, nm):
         return d["layers"][[l["nm"] for l in d["layers"]].index(nm)] if nm in [l["nm"] for l in d["layers"]] else None
@@ -286,19 +410,27 @@ def main():
         dl(idle, "head")["ks"]["r"] = anim([(0, 0), (45, 2), (DUR, 0)])
     if dl(idle, "tail"):
         dl(idle, "tail")["ks"]["r"] = anim([(0, 0), (22, -6), (45, 0), (68, 6), (DUR, 0)])
+    if dl(idle, "eyes"):
+        dl(idle, "eyes")["ks"]["s"] = blink(DUR, at=[32, 74])
     variants["idle"] = idle
 
-    # wave: raised arm rotates, plus gentle idle underneath
+    # wave: raised arm rotates, plus gentle idle underneath.
+    # Motion craft (Lewis's run-4 defect: the paw arc crossed the head
+    # outline): the arm pivots at its lower-inner corner, so NEGATIVE
+    # rotation swings the paw onto the face. Wave POSITIVE (outward, away
+    # from the head) with a small negative return that stays clear.
     wave = doc(f"{target}-wave-extracted")
     b = dl(wave, "base")
     b["ks"]["s"] = anim([(0, [100, 100, 100]), (45, [101, 101.8, 100]), (DUR, [100, 100, 100])])
     arm = next((dl(wave, r["name"]) for r in riggable if "arm" in r["name"]), None)
     if arm:
-        arm["ks"]["r"] = anim([(0, 0), (12, -16), (24, 8), (36, -16), (48, 0), (DUR, 0)])
+        arm["ks"]["r"] = anim([(0, 0), (12, 14), (24, -4), (36, 14), (48, 0), (DUR, 0)])
     if dl(wave, "head"):
         dl(wave, "head")["ks"]["r"] = anim([(0, 0), (24, -2), (48, 0), (DUR, 0)])
     if dl(wave, "tail"):
         dl(wave, "tail")["ks"]["r"] = anim([(0, 0), (30, 5), (60, -3), (DUR, 0)])
+    if dl(wave, "eyes"):
+        dl(wave, "eyes")["ks"]["s"] = blink(DUR, at=[56])
     variants["wave"] = wave
 
     for vname, d in variants.items():
