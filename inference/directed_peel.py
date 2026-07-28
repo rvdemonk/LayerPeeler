@@ -40,6 +40,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import numpy as np
 import yaml
 from PIL import Image
 from transformers import set_seed
@@ -142,6 +143,44 @@ def is_flat_base(image_vlm: Image.Image, step: int, cfg: Config, output_folders:
         return False
 
 
+def verify_peel(
+    before: Image.Image,
+    after: Image.Image,
+    bbox_mask_path: str,
+    min_part_px: int,
+    max_collateral: float,
+) -> Dict:
+    """On-box acceptance check for a directed peel.
+
+    A peel is accepted when (a) enough pixels changed INSIDE the part's own
+    detection bbox (the part actually came off — run 2 had three silent
+    no-ops), and (b) collateral change outside the bbox is bounded (run 2's
+    'tail' peel fired one step late, and the arm peel clipped the tail tip).
+    Retrying on a warm box costs ~25 s; discovering this after destroy costs a
+    ~$1 reprovision — verification placement is the pipeline's biggest lever.
+    """
+    b = np.asarray(before.convert("RGB"), dtype=int)
+    a = np.asarray(after.convert("RGB"), dtype=int)
+    changed = np.abs(b - a).sum(axis=2) > 30
+
+    det = None
+    if bbox_mask_path and os.path.exists(bbox_mask_path):
+        det = np.asarray(Image.open(bbox_mask_path).convert("L").resize(before.size, Image.NEAREST)) > 0
+
+    if det is None:
+        inside = int(changed.sum())
+        outside = 0
+    else:
+        inside = int((changed & det).sum())
+        outside = int((changed & ~det).sum())
+
+    collateral = (outside / inside) if inside else float("inf")
+    ok = inside >= min_part_px and collateral <= max_collateral
+    return {"ok": bool(ok), "inside_px": inside, "outside_px": outside,
+            "collateral": round(collateral, 3) if inside else None,
+            "had_bbox": det is not None}
+
+
 def peel_once(
     pipeline,
     image: Image.Image,
@@ -217,27 +256,57 @@ def run(pipeline, image_path: str, plan: Dict, cfg: Config, logger) -> Dict:
     flat_step = step
     logger.info(f"Flatten phase done at frame {flat_step}.")
 
-    # ---- Phase 2: directed peels -----------------------------------------
+    # ---- Phase 2: directed peels, verified with retry ---------------------
     parts_out = []
     for part in plan.get("parts", []):
-        name, caption = part["name"], part["caption"]
+        name = part["name"]
+        captions = [part["caption"]] + part.get("alt_captions", [])
         t0 = time.time()
         before = step
         step += 1
-        logger.info(f"Directed peel '{name}': frames {before} -> {step}")
-        out = peel_once(pipeline, image, caption, step, cfg, output_folders, logger)
-        if out is None:
-            logger.error(f"Directed peel '{name}' failed to generate; skipping (frames unchanged).")
+        frame_path = os.path.join(output_folders["png"], f"layer_{step}.png")
+        bbox_path = os.path.join(output_folders["mask"], f"bbox_{step - 1}.png")
+
+        accepted, attempts = None, []
+        for attempt in range(cfg.max_attempts):
+            caption = captions[min(attempt, len(captions) - 1)]
+            set_seed(cfg.seed + attempt * 1009)
+            logger.info(f"Directed peel '{name}' attempt {attempt + 1}/{cfg.max_attempts}: "
+                        f"frames {before} -> {step} ({caption!r})")
+            out = peel_once(pipeline, image, caption, step, cfg, output_folders, logger)
+            if out is None:
+                attempts.append({"attempt": attempt + 1, "caption": caption, "generated": False})
+                if os.path.exists(frame_path):
+                    os.remove(frame_path)
+                continue
+
+            v = verify_peel(image, out, bbox_path, cfg.min_part_px, cfg.max_collateral)
+            v.update({"attempt": attempt + 1, "caption": caption, "generated": True})
+            attempts.append(v)
+            logger.info(f"  verify: inside={v['inside_px']}px outside={v['outside_px']}px "
+                        f"collateral={v['collateral']} -> {'ACCEPT' if v['ok'] else 'REJECT'}")
+            if v["ok"]:
+                accepted = (out, v, caption)
+                break
+            # keep the reject for post-mortem, bust the cache for the retry
+            os.replace(frame_path, os.path.join(output_folders["png"],
+                                                f"layer_{step}_rejected{attempt + 1}.png"))
+
+        if accepted is None:
+            logger.error(f"Directed peel '{name}': all {cfg.max_attempts} attempts rejected; "
+                         f"skipping (part stays in base).")
             step -= 1
             peel_log.append({"step": step, "phase": "directed", "name": name,
-                             "caption": caption, "failed": True})
+                             "caption": captions[0], "failed": True, "attempts": attempts})
+            save_json({"log": peel_log}, log_path)
             continue
 
-        image = out
+        image, verdict, used_caption = accepted
         rec = {
-            "step": step, "phase": "directed", "name": name, "caption": caption,
+            "step": step, "phase": "directed", "name": name, "caption": used_caption,
             "frame_before": before, "frame_after": step,
             "seconds": round(time.time() - t0, 1),
+            "verify": verdict, "attempts": attempts,
         }
         peel_log.append(rec)
         parts_out.append(rec)
@@ -281,6 +350,14 @@ def parse_arguments():
     parser.add_argument("--bbox_expansion", type=int, default=15)
     parser.add_argument("--mask_detection_temperature", type=float, default=0.5)
 
+    # Verify-retry (directed phase)
+    parser.add_argument("--max_attempts", type=int, default=3,
+                        help="attempts per directed peel before skipping the part")
+    parser.add_argument("--min_part_px", type=int, default=800,
+                        help="min changed px inside the detection bbox to accept a peel")
+    parser.add_argument("--max_collateral", type=float, default=0.5,
+                        help="max ratio of outside-bbox change to inside-bbox change")
+
     parser.add_argument("--flux_width", type=int, default=512)
     parser.add_argument("--flux_height", type=int, default=512)
     parser.add_argument("--vlm_resolution", type=int, default=512)
@@ -316,6 +393,10 @@ def main():
         input_folder="",
         max_images=1,
     )
+    # driver-only knobs (Config is upstream's dataclass; attach post-construction)
+    cfg.max_attempts = args.max_attempts
+    cfg.min_part_px = args.min_part_px
+    cfg.max_collateral = args.max_collateral
 
     Path(args.output_folder, "config.yaml").write_text(yaml.dump({**vars(args), "plan": plan}))
 

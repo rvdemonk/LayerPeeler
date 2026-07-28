@@ -1,0 +1,40 @@
+{
+  "target": "fox",
+  "flatten": { "mode": "auto", "max_steps": 6 },
+  "parts": [
+    {
+      "name": "arm_right_raised",
+      "caption": "the raised arm on the right side of the image"
+    },
+    {
+      "name": "arm_left",
+      "caption": "the arm hanging down on the left side of the image",
+      "alt_captions": [
+        "the small arm attached to the left side of the body",
+        "the short limb sticking out on the left side of the image"
+      ]
+    },
+    {
+      "name": "tail",
+      "caption": "the bushy tail on the lower right side of the image",
+      "alt_captions": [
+        "the large curved tail with a white tip on the right side of the image"
+      ]
+    },
+    {
+      "name": "legs",
+      "caption": "both legs at the bottom of the image",
+      "alt_captions": [
+        "the two short legs at the bottom of the body",
+        "the two stubby feet at the bottom of the image"
+      ]
+    },
+    {
+      "name": "head",
+      "caption": "the entire head at the top of the image, including the ears and the cream-colored chin and muzzle",
+      "alt_captions": [
+        "the whole head with ears, face and cream chin at the top of the image"
+      ]
+    }
+  ]
+}
