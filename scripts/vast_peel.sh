@@ -29,7 +29,12 @@ DISK_GB=80
 MAX_DPH=0.80              # $/hr ceiling when picking an offer
 MIN_CREDIT=1.50           # refuse to start below this
 MAX_RUN_SECONDS=7200      # hard cap on the remote run (2 h)
-SEARCH_QUERY='gpu_name in [RTX_A6000,A40,L40,L40S] num_gpus=1 disk_space>=80 inet_down>=200 rentable=true verified=true'
+# direct_port_count>0: proxy-only machines gave us the run-5 double-fizzle
+# (2026-07-28: connection refused, then publickey denied). machine_id!=10958:
+# that box advertises direct ports but its instances never get working SSH —
+# sshd refused on boot 1, authorized_keys never injected on boot 2. It is also
+# the cheapest A6000, so the dph sort picks it every time. Blacklisted.
+SEARCH_QUERY='gpu_name in [RTX_A6000,A40,L40,L40S] num_gpus=1 disk_space>=80 inet_down>=200 rentable=true verified=true direct_port_count>0 machine_id!=10958'
 
 log() { printf '\033[1;36m[vast_peel]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[vast_peel]\033[0m %s\n' "$*" >&2; exit 1; }
