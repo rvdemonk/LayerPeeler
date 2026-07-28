@@ -1,0 +1,5 @@
+{
+    "description": "A cartoon fox standing up. It has a red-orange body with cream accents on the snout, belly, and tail tip. One arm is raised as if waving.",
+    "think": "To find the non-occluded decorative elements, I examine the image for details, patches, highlights, or outlines that sit on top of the base shapes and are not covered by any other element.\n- The head, torso, arms, legs, and tail are body parts and must not be selected, even if they are non-occluded.\n- The cream snout area is covered by the brown nose.\n- The cream belly patch might be partially covered at the top by the overlapping head.\n- The brown nose sits on top of the snout area and is completely unobstructed.\n- The black outline on the white tail tip is also fully visible and covers the edge of the tail tip.\nTherefore, the brown nose and the black outline on the tail tip are the non-occluded decorative details.",
+    "caption": "The brown nose and the black outline on the tail tip"
+}

@@ -1,0 +1,141 @@
+{
+    "target": "fox",
+    "flat_frame": 3,
+    "final_frame": 9,
+    "parts": [
+        {
+            "step": 4,
+            "phase": "directed",
+            "name": "arm_right_raised",
+            "caption": "the raised arm on the right side of the image",
+            "frame_before": 3,
+            "frame_after": 4,
+            "seconds": 22.1
+        },
+        {
+            "step": 5,
+            "phase": "directed",
+            "name": "arm_left",
+            "caption": "the arm hanging down on the left side of the image",
+            "frame_before": 4,
+            "frame_after": 5,
+            "seconds": 23.0
+        },
+        {
+            "step": 6,
+            "phase": "directed",
+            "name": "tail",
+            "caption": "the bushy tail on the lower right side of the image",
+            "frame_before": 5,
+            "frame_after": 6,
+            "seconds": 22.7
+        },
+        {
+            "step": 7,
+            "phase": "directed",
+            "name": "leg_left",
+            "caption": "the leg on the left side of the image",
+            "frame_before": 6,
+            "frame_after": 7,
+            "seconds": 22.1
+        },
+        {
+            "step": 8,
+            "phase": "directed",
+            "name": "leg_right",
+            "caption": "the leg on the right side of the image",
+            "frame_before": 7,
+            "frame_after": 8,
+            "seconds": 22.0
+        },
+        {
+            "step": 9,
+            "phase": "directed",
+            "name": "head",
+            "caption": "the head with ears at the top of the image",
+            "frame_before": 8,
+            "frame_after": 9,
+            "seconds": 22.0
+        }
+    ],
+    "log": [
+        {
+            "step": 1,
+            "phase": "flatten",
+            "caption": "The white highlights in the eyes and the black oval nose",
+            "seconds": 28.2
+        },
+        {
+            "step": 2,
+            "phase": "flatten",
+            "caption": "The black outlines of the fox",
+            "seconds": 40.9
+        },
+        {
+            "step": 3,
+            "phase": "flatten",
+            "caption": "The brown nose and the black outline on the tail tip",
+            "seconds": 34.6
+        },
+        {
+            "step": 4,
+            "phase": "directed",
+            "name": "arm_right_raised",
+            "caption": "the raised arm on the right side of the image",
+            "frame_before": 3,
+            "frame_after": 4,
+            "seconds": 22.1
+        },
+        {
+            "step": 5,
+            "phase": "directed",
+            "name": "arm_left",
+            "caption": "the arm hanging down on the left side of the image",
+            "frame_before": 4,
+            "frame_after": 5,
+            "seconds": 23.0
+        },
+        {
+            "step": 6,
+            "phase": "directed",
+            "name": "tail",
+            "caption": "the bushy tail on the lower right side of the image",
+            "frame_before": 5,
+            "frame_after": 6,
+            "seconds": 22.7
+        },
+        {
+            "step": 7,
+            "phase": "directed",
+            "name": "leg_left",
+            "caption": "the leg on the left side of the image",
+            "frame_before": 6,
+            "frame_after": 7,
+            "seconds": 22.1
+        },
+        {
+            "step": 8,
+            "phase": "directed",
+            "name": "leg_right",
+            "caption": "the leg on the right side of the image",
+            "frame_before": 7,
+            "frame_after": 8,
+            "seconds": 22.0
+        },
+        {
+            "step": 9,
+            "phase": "directed",
+            "name": "head",
+            "caption": "the head with ears at the top of the image",
+            "frame_before": 8,
+            "frame_after": 9,
+            "seconds": 22.0
+        }
+    ],
+    "economics": {
+        "wall_seconds": 254.7,
+        "peels": 9,
+        "directed_peels": 6,
+        "flatten_peels": 3
+    }
+}

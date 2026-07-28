@@ -1,0 +1,92 @@
+[
+    {
+        "box_2d": [
+            78,
+            668,
+            273,
+            691
+        ],
+        "label": "The black outline on the right ear"
+    },
+    {
+        "box_2d": [
+            133,
+            335,
+            235,
+            405
+        ],
+        "label": "the cream inner ears"
+    },
+    {
+        "box_2d": [
+            133,
+            589,
+            235,
+            660
+        ],
+        "label": "the cream inner ears"
+    },
+    {
+        "box_2d": [
+            436,
+            469,
+            451,
+            527
+        ],
+        "label": "the dark brown mouth line"
+    },
+    {
+        "box_2d": [
+            525,
+            396,
+            768,
+            601
+        ],
+        "label": "the cream belly patch"
+    },
+    {
+        "box_2d": [
+            691,
+            379,
+            792,
+            485
+        ],
+        "label": "the dark orange leg and tail shadows"
+    },
+    {
+        "box_2d": [
+            691,
+            512,
+            792,
+            621
+        ],
+        "label": "the dark orange leg and tail shadows"
+    },
+    {
+        "box_2d": [
+            595,
+            605,
+            804,
+            803
+        ],
+        "label": "the dark orange leg and tail shadows"
+    },
+    {
+        "box_2d": [
+            491,
+            759,
+            601,
+            820
+        ],
+        "label": "the grey tail shadow"
+    },
+    {
+        "box_2d": [
+            480,
+            679,
+            637,
+            839
+        ],
+        "label": "the black tail outline"
+    }
+]

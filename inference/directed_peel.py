@@ -290,7 +290,7 @@ def run(pipeline, image_path: str, plan: Dict, cfg: Config, logger) -> Dict:
                 break
             # keep the reject for post-mortem, bust the cache for the retry
             os.replace(frame_path, os.path.join(output_folders["png"],
-                                                f"layer_{step}_rejected{attempt + 1}.png"))
+                                                f"layer_{step}_{name}_rejected{attempt + 1}.png"))
 
         if accepted is None:
             logger.error(f"Directed peel '{name}': all {cfg.max_attempts} attempts rejected; "

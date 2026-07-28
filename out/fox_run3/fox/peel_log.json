@@ -1,0 +1,245 @@
+{
+    "target": "fox",
+    "flat_frame": 2,
+    "final_frame": 3,
+    "parts": [
+        {
+            "step": 3,
+            "phase": "directed",
+            "name": "arm_right_raised",
+            "caption": "the raised arm on the right side of the image",
+            "frame_before": 2,
+            "frame_after": 3,
+            "seconds": 19.9,
+            "verify": {
+                "ok": true,
+                "inside_px": 4167,
+                "outside_px": 213,
+                "collateral": 0.051,
+                "had_bbox": true,
+                "attempt": 1,
+                "caption": "the raised arm on the right side of the image",
+                "generated": true
+            },
+            "attempts": [
+                {
+                    "ok": true,
+                    "inside_px": 4167,
+                    "outside_px": 213,
+                    "collateral": 0.051,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the raised arm on the right side of the image",
+                    "generated": true
+                }
+            ]
+        }
+    ],
+    "log": [
+        {
+            "step": 1,
+            "phase": "flatten",
+            "caption": "The black outline of the fox, the black nose, and the white highlights in the eyes",
+            "seconds": 35.7
+        },
+        {
+            "step": 2,
+            "phase": "flatten",
+            "caption": "The black outline on the right ear, the cream inner ears, the dark brown mouth line, the cream belly patch, the dark orange leg and tail shadows, the grey tail shadow, and the black tail outline",
+            "seconds": 28.8
+        },
+        {
+            "step": 3,
+            "phase": "directed",
+            "name": "arm_right_raised",
+            "caption": "the raised arm on the right side of the image",
+            "frame_before": 2,
+            "frame_after": 3,
+            "seconds": 19.9,
+            "verify": {
+                "ok": true,
+                "inside_px": 4167,
+                "outside_px": 213,
+                "collateral": 0.051,
+                "had_bbox": true,
+                "attempt": 1,
+                "caption": "the raised arm on the right side of the image",
+                "generated": true
+            },
+            "attempts": [
+                {
+                    "ok": true,
+                    "inside_px": 4167,
+                    "outside_px": 213,
+                    "collateral": 0.051,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the raised arm on the right side of the image",
+                    "generated": true
+                }
+            ]
+        },
+        {
+            "step": 3,
+            "phase": "directed",
+            "name": "arm_left",
+            "caption": "the arm hanging down on the left side of the image",
+            "failed": true,
+            "attempts": [
+                {
+                    "ok": false,
+                    "inside_px": 32,
+                    "outside_px": 1319,
+                    "collateral": 41.219,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the arm hanging down on the left side of the image",
+                    "generated": true
+                },
+                {
+                    "ok": false,
+                    "inside_px": 31,
+                    "outside_px": 120,
+                    "collateral": 3.871,
+                    "had_bbox": true,
+                    "attempt": 2,
+                    "caption": "the small arm attached to the left side of the body",
+                    "generated": true
+                },
+                {
+                    "ok": false,
+                    "inside_px": 40,
+                    "outside_px": 268,
+                    "collateral": 6.7,
+                    "had_bbox": true,
+                    "attempt": 3,
+                    "caption": "the short limb sticking out on the left side of the image",
+                    "generated": true
+                }
+            ]
+        },
+        {
+            "step": 3,
+            "phase": "directed",
+            "name": "tail",
+            "caption": "the bushy tail on the lower right side of the image",
+            "failed": true,
+            "attempts": [
+                {
+                    "ok": false,
+                    "inside_px": 31,
+                    "outside_px": 3188,
+                    "collateral": 102.839,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the bushy tail on the lower right side of the image",
+                    "generated": true
+                },
+                {
+                    "ok": false,
+                    "inside_px": 26,
+                    "outside_px": 111,
+                    "collateral": 4.269,
+                    "had_bbox": true,
+                    "attempt": 2,
+                    "caption": "the large curved tail with a white tip on the right side of the image",
+                    "generated": true
+                },
+                {
+                    "ok": false,
+                    "inside_px": 39,
+                    "outside_px": 883,
+                    "collateral": 22.641,
+                    "had_bbox": true,
+                    "attempt": 3,
+                    "caption": "the large curved tail with a white tip on the right side of the image",
+                    "generated": true
+                }
+            ]
+        },
+        {
+            "step": 3,
+            "phase": "directed",
+            "name": "legs",
+            "caption": "both legs at the bottom of the image",
+            "failed": true,
+            "attempts": [
+                {
+                    "ok": false,
+                    "inside_px": 21,
+                    "outside_px": 101,
+                    "collateral": 4.81,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "both legs at the bottom of the image",
+                    "generated": true
+                },
+                {
+                    "ok": false,
+                    "inside_px": 33,
+                    "outside_px": 103,
+                    "collateral": 3.121,
+                    "had_bbox": true,
+                    "attempt": 2,
+                    "caption": "the two short legs at the bottom of the body",
+                    "generated": true
+                },
+                {
+                    "ok": false,
+                    "inside_px": 43,
+                    "outside_px": 141,
+                    "collateral": 3.279,
+                    "had_bbox": true,
+                    "attempt": 3,
+                    "caption": "the two stubby feet at the bottom of the image",
+                    "generated": true
+                }
+            ]
+        },
+        {
+            "step": 3,
+            "phase": "directed",
+            "name": "head",
+            "caption": "the entire head at the top of the image, including the ears and the cream-colored chin and muzzle",
+            "failed": true,
+            "attempts": [
+                {
+                    "ok": false,
+                    "inside_px": 844,
+                    "outside_px": 15374,
+                    "collateral": 18.216,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the entire head at the top of the image, including the ears and the cream-colored chin and muzzle",
+                    "generated": true
+                },
+                {
+                    "ok": false,
+                    "inside_px": 312,
+                    "outside_px": 1540,
+                    "collateral": 4.936,
+                    "had_bbox": true,
+                    "attempt": 2,
+                    "caption": "the whole head with ears, face and cream chin at the top of the image",
+                    "generated": true
+                },
+                {
+                    "ok": false,
+                    "inside_px": 123,
+                    "outside_px": 7437,
+                    "collateral": 60.463,
+                    "had_bbox": true,
+                    "attempt": 3,
+                    "caption": "the whole head with ears, face and cream chin at the top of the image",
+                    "generated": true
+                }
+            ]
+        }
+    ],
+    "economics": {
+        "wall_seconds": 317.1,
+        "peels": 3,
+        "directed_peels": 1,
+        "flatten_peels": 2
+    }
+}

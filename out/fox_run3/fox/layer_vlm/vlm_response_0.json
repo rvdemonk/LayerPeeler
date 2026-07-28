@@ -1,0 +1,5 @@
+{
+    "description": "A cartoon fox standing up and waving. It is orange with white patches on its face, belly, inner ears, and tail tip, and has a brown snout. The image features a bold black outline around all shapes.",
+    "think": "I need to identify the non-occluded decorative details.\n1.  **Eyes:** The eyes have white highlights on black pupils, surrounded by white sclera and black outlines. The white highlights are the topmost elements here.\n2.  **Nose:** The black nose sits on top of the brown snout area and is not covered by anything.\n3.  **Outlines:** The thick black outline defining the character and its distinct color patches is visually on top of the colored shapes and is not occluded by any other element.\n4.  **Other patches:** The white/cream patches (belly, tail tip, face, ears) and the brown snout are bordered by the black outline, so the outline is visually above their edges.\nTherefore, the topmost non-occluded elements are the white highlights in the eyes, the black nose, and the black outline itself.",
+    "caption": "The black outline of the fox, the black nose, and the white highlights in the eyes"
+}

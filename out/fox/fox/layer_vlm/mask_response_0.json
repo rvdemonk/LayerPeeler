@@ -1,0 +1,29 @@
+[
+    {
+        "box_2d": [
+            292,
+            401,
+            335,
+            442
+        ],
+        "label": "The white highlights in the eyes and the black oval nose"
+    },
+    {
+        "box_2d": [
+            437,
+            455,
+            492,
+            538
+        ],
+        "label": "The white highlights in the eyes and the black oval nose"
+    },
+    {
+        "box_2d": [
+            292,
+            554,
+            335,
+            594
+        ],
+        "label": "The white highlights in the eyes and the black oval nose"
+    }
+]

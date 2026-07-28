@@ -1,0 +1,45 @@
+bbox_expansion: 15
+disable_mask_detection: false
+flux_height: 512
+flux_width: 512
+guidance_scale: 4.5
+image: /root/input.png
+lora_name: LayerPeeler_rank256_step20000
+lora_path: kingno/LayerPeeler
+mask_detection_temperature: 0.5
+max_attempts: 3
+max_collateral: 0.5
+min_part_px: 800
+num_inference_steps: 30
+output_folder: /root/outputs
+plan:
+  flatten:
+    max_steps: 6
+    mode: auto
+  parts:
+  - caption: the raised arm on the right side of the image
+    name: arm_right_raised
+  - alt_captions:
+    - the small arm attached to the left side of the body
+    - the short limb sticking out on the left side of the image
+    caption: the arm hanging down on the left side of the image
+    name: arm_left
+  - alt_captions:
+    - the large curved tail with a white tip on the right side of the image
+    caption: the bushy tail on the lower right side of the image
+    name: tail
+  - alt_captions:
+    - the two short legs at the bottom of the body
+    - the two stubby feet at the bottom of the image
+    caption: both legs at the bottom of the image
+    name: legs
+  - alt_captions:
+    - the whole head with ears, face and cream chin at the top of the image
+    caption: the entire head at the top of the image, including the ears and the cream-colored
+      chin and muzzle
+    name: head
+  target: fox
+pretrained_model_name_or_path: ../PhotoDoodle_Pretrain
+seed: 42
+vlm_model_name: gemini-pro-latest
+vlm_resolution: 512

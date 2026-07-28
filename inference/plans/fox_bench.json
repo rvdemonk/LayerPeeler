@@ -1,0 +1,26 @@
+{
+  "trials": [
+    { "name": "head", "caption": "the head with ears at the top of the image", "guidance": 4.5, "seed": 42 },
+    { "name": "head", "caption": "the head with ears at the top of the image", "guidance": 6.5, "seed": 42 },
+    { "name": "head", "caption": "the head with ears at the top of the image", "guidance": 8.5, "seed": 42 },
+    { "name": "headElab", "caption": "the entire head at the top of the image, including the ears and the cream-colored chin and muzzle", "guidance": 4.5, "seed": 42 },
+
+    { "name": "armL", "caption": "the arm on the left side of the image", "guidance": 4.5, "seed": 42 },
+    { "name": "armL", "caption": "the arm on the left side of the image", "guidance": 6.5, "seed": 42 },
+    { "name": "armL", "caption": "the arm on the left side of the image", "guidance": 8.5, "seed": 42 },
+    { "name": "armLshort", "caption": "the left arm", "guidance": 8.5, "seed": 42 },
+
+    { "name": "legs", "caption": "the two legs at the bottom of the image", "guidance": 4.5, "seed": 42 },
+    { "name": "legs", "caption": "the two legs at the bottom of the image", "guidance": 6.5, "seed": 42 },
+    { "name": "legs", "caption": "the two legs at the bottom of the image", "guidance": 8.5, "seed": 42 },
+    { "name": "legsShort", "caption": "the legs", "guidance": 8.5, "seed": 42 },
+
+    { "name": "tail", "caption": "the bushy tail on the lower right side of the image", "guidance": 4.5, "seed": 42 },
+    { "name": "tail", "caption": "the bushy tail on the lower right side of the image", "guidance": 6.5, "seed": 42 },
+    { "name": "tail", "caption": "the bushy tail on the lower right side of the image", "guidance": 8.5, "seed": 42 },
+    { "name": "tail", "caption": "the bushy tail on the lower right side of the image", "guidance": 6.5, "seed": 1042 },
+
+    { "name": "headSteps50", "caption": "the head with ears at the top of the image", "guidance": 4.5, "seed": 42, "steps": 50 },
+    { "name": "armLsteps50", "caption": "the arm on the left side of the image", "guidance": 6.5, "seed": 42, "steps": 50 }
+  ]
+}
