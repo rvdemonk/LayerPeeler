@@ -1,0 +1,37 @@
+bbox_expansion: 15
+disable_mask_detection: false
+flux_height: 512
+flux_width: 512
+guidance_scale: 4.5
+image: /root/input.png
+lora_name: LayerPeeler_rank256_step20000
+lora_path: kingno/LayerPeeler
+mask_detection_temperature: 0.5
+max_attempts: 3
+max_collateral: 0.5
+min_part_px: 800
+num_inference_steps: 30
+output_folder: /root/outputs
+plan:
+  flatten:
+    max_steps: 6
+    mode: auto
+  mode: independent
+  parts:
+  - caption: the raised arm on the right side of the image
+    guidance: 4.5
+    name: arm_right_raised
+  - caption: the bushy tail on the lower right side of the image
+    guidance: 6.5
+    name: tail
+  - caption: the two legs at the bottom of the image
+    guidance: 4.5
+    name: legs
+  - caption: the head with ears at the top of the image
+    guidance: 6.5
+    name: head
+  target: fox
+pretrained_model_name_or_path: ../PhotoDoodle_Pretrain
+seed: 42
+vlm_model_name: gemini-pro-latest
+vlm_resolution: 512

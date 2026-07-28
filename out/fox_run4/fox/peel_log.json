@@ -1,0 +1,271 @@
+{
+    "mode": "independent",
+    "target": "fox",
+    "flat_frame": 1,
+    "base_file": "base_residual.png",
+    "parts": [
+        {
+            "phase": "independent",
+            "name": "arm_right_raised",
+            "caption": "the raised arm on the right side of the image",
+            "file": "part_arm_right_raised.png",
+            "mask_idx": 900,
+            "guidance": 4.5,
+            "seconds": 19.9,
+            "verify": {
+                "ok": true,
+                "inside_px": 1334,
+                "outside_px": 386,
+                "collateral": 0.289,
+                "had_bbox": true,
+                "attempt": 1,
+                "caption": "the raised arm on the right side of the image",
+                "generated": true
+            },
+            "attempts": [
+                {
+                    "ok": true,
+                    "inside_px": 1334,
+                    "outside_px": 386,
+                    "collateral": 0.289,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the raised arm on the right side of the image",
+                    "generated": true
+                }
+            ]
+        },
+        {
+            "phase": "independent",
+            "name": "tail",
+            "caption": "the bushy tail on the lower right side of the image",
+            "file": "part_tail.png",
+            "mask_idx": 901,
+            "guidance": 6.5,
+            "seconds": 21.0,
+            "verify": {
+                "ok": true,
+                "inside_px": 4351,
+                "outside_px": 337,
+                "collateral": 0.077,
+                "had_bbox": true,
+                "attempt": 1,
+                "caption": "the bushy tail on the lower right side of the image",
+                "generated": true
+            },
+            "attempts": [
+                {
+                    "ok": true,
+                    "inside_px": 4351,
+                    "outside_px": 337,
+                    "collateral": 0.077,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the bushy tail on the lower right side of the image",
+                    "generated": true
+                }
+            ]
+        },
+        {
+            "phase": "independent",
+            "name": "legs",
+            "caption": "the two legs at the bottom of the image",
+            "file": "part_legs.png",
+            "mask_idx": 902,
+            "guidance": 4.5,
+            "seconds": 20.3,
+            "verify": {
+                "ok": true,
+                "inside_px": 1223,
+                "outside_px": 370,
+                "collateral": 0.303,
+                "had_bbox": true,
+                "attempt": 1,
+                "caption": "the two legs at the bottom of the image",
+                "generated": true
+            },
+            "attempts": [
+                {
+                    "ok": true,
+                    "inside_px": 1223,
+                    "outside_px": 370,
+                    "collateral": 0.303,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the two legs at the bottom of the image",
+                    "generated": true
+                }
+            ]
+        },
+        {
+            "phase": "independent",
+            "name": "head",
+            "caption": "the head with ears at the top of the image",
+            "file": "part_head.png",
+            "mask_idx": 903,
+            "guidance": 6.5,
+            "seconds": 20.6,
+            "verify": {
+                "ok": true,
+                "inside_px": 4467,
+                "outside_px": 454,
+                "collateral": 0.102,
+                "had_bbox": true,
+                "attempt": 1,
+                "caption": "the head with ears at the top of the image",
+                "generated": true
+            },
+            "attempts": [
+                {
+                    "ok": true,
+                    "inside_px": 4467,
+                    "outside_px": 454,
+                    "collateral": 0.102,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the head with ears at the top of the image",
+                    "generated": true
+                }
+            ]
+        }
+    ],
+    "log": [
+        {
+            "step": 1,
+            "phase": "flatten",
+            "caption": "The black outline of the fox, the black nose, and the white highlights in the eyes",
+            "seconds": 34.7
+        },
+        {
+            "phase": "independent",
+            "name": "arm_right_raised",
+            "caption": "the raised arm on the right side of the image",
+            "file": "part_arm_right_raised.png",
+            "mask_idx": 900,
+            "guidance": 4.5,
+            "seconds": 19.9,
+            "verify": {
+                "ok": true,
+                "inside_px": 1334,
+                "outside_px": 386,
+                "collateral": 0.289,
+                "had_bbox": true,
+                "attempt": 1,
+                "caption": "the raised arm on the right side of the image",
+                "generated": true
+            },
+            "attempts": [
+                {
+                    "ok": true,
+                    "inside_px": 1334,
+                    "outside_px": 386,
+                    "collateral": 0.289,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the raised arm on the right side of the image",
+                    "generated": true
+                }
+            ]
+        },
+        {
+            "phase": "independent",
+            "name": "tail",
+            "caption": "the bushy tail on the lower right side of the image",
+            "file": "part_tail.png",
+            "mask_idx": 901,
+            "guidance": 6.5,
+            "seconds": 21.0,
+            "verify": {
+                "ok": true,
+                "inside_px": 4351,
+                "outside_px": 337,
+                "collateral": 0.077,
+                "had_bbox": true,
+                "attempt": 1,
+                "caption": "the bushy tail on the lower right side of the image",
+                "generated": true
+            },
+            "attempts": [
+                {
+                    "ok": true,
+                    "inside_px": 4351,
+                    "outside_px": 337,
+                    "collateral": 0.077,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the bushy tail on the lower right side of the image",
+                    "generated": true
+                }
+            ]
+        },
+        {
+            "phase": "independent",
+            "name": "legs",
+            "caption": "the two legs at the bottom of the image",
+            "file": "part_legs.png",
+            "mask_idx": 902,
+            "guidance": 4.5,
+            "seconds": 20.3,
+            "verify": {
+                "ok": true,
+                "inside_px": 1223,
+                "outside_px": 370,
+                "collateral": 0.303,
+                "had_bbox": true,
+                "attempt": 1,
+                "caption": "the two legs at the bottom of the image",
+                "generated": true
+            },
+            "attempts": [
+                {
+                    "ok": true,
+                    "inside_px": 1223,
+                    "outside_px": 370,
+                    "collateral": 0.303,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the two legs at the bottom of the image",
+                    "generated": true
+                }
+            ]
+        },
+        {
+            "phase": "independent",
+            "name": "head",
+            "caption": "the head with ears at the top of the image",
+            "file": "part_head.png",
+            "mask_idx": 903,
+            "guidance": 6.5,
+            "seconds": 20.6,
+            "verify": {
+                "ok": true,
+                "inside_px": 4467,
+                "outside_px": 454,
+                "collateral": 0.102,
+                "had_bbox": true,
+                "attempt": 1,
+                "caption": "the head with ears at the top of the image",
+                "generated": true
+            },
+            "attempts": [
+                {
+                    "ok": true,
+                    "inside_px": 4467,
+                    "outside_px": 454,
+                    "collateral": 0.102,
+                    "had_bbox": true,
+                    "attempt": 1,
+                    "caption": "the head with ears at the top of the image",
+                    "generated": true
+                }
+            ]
+        }
+    ],
+    "economics": {
+        "wall_seconds": 126.8,
+        "flatten_peels": 1,
+        "parts_accepted": 4,
+        "parts_requested": 4,
+        "attempts_total": 4
+    }
+}
