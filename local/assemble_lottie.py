@@ -195,13 +195,35 @@ def main():
     base_c = base_rec["centroid"]
 
     # ---- 1. split details by ownership -----------------------------------
+    # Ownership is decided per CONNECTED COMPONENT by alpha-overlap voting, with
+    # nearest-distance as fallback only. Pixel-nearest alone misassigns whole
+    # features: the fox's white tail tip (a details component) sat nearer the
+    # raised arm's alpha than the tail's, so it waved with the arm.
     det_rgba = cv2.cvtColor(cv2.imread(str(parts_dir / "details.png"), cv2.IMREAD_UNCHANGED), cv2.COLOR_BGRA2RGBA)
     owners = ["base"] + [r["name"] for r in riggable]
-    dists = []
+    alphas, dists = [], []
     for name in owners:
         a = cv2.imread(str(parts_dir / f"{name}.png"), cv2.IMREAD_UNCHANGED)[:, :, 3]
+        # dilate so details sitting ON a part's edge (outlines) still overlap it
+        alphas.append(cv2.dilate((a > 0).astype(np.uint8), np.ones((9, 9), np.uint8)))
         dists.append(cv2.distanceTransform((a == 0).astype(np.uint8), cv2.DIST_L2, 3))
-    owner_idx = np.argmin(np.stack(dists), axis=0)
+    n_comp, comp = cv2.connectedComponents((det_rgba[:, :, 3] > 0).astype(np.uint8))
+    owner_idx = np.zeros(comp.shape, dtype=np.int32)
+    pixel_nearest = np.argmin(np.stack(dists), axis=0)
+    for c in range(1, n_comp):
+        cmask = comp == c
+        overlaps = [int(a[cmask].sum()) for a in alphas]
+        total = sum(overlaps)
+        if total > 0 and max(overlaps) / total >= 0.7:
+            # one part dominates: the component is a feature OF that part
+            # (tail tip, eye, belly patch) — assign it whole
+            owner_idx[cmask] = int(np.argmax(overlaps))
+        elif total > 0:
+            # genuinely shared (the full-body outline loop): split pixel-wise
+            # so each stretch of outline rides the part it hugs
+            owner_idx[cmask] = pixel_nearest[cmask]
+        else:
+            owner_idx[cmask] = int(np.argmin([d[cmask].mean() for d in dists]))
 
     det_groups = {}
     for k, name in enumerate(owners):

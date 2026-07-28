@@ -212,6 +212,18 @@ def main():
             outside = int(((m > 0) & (det == 0)).sum())
             m = cv2.bitwise_and(m, det)
             print(f"  {name}: constrained to detection bbox ({outside}px of diff fell outside)")
+        # The bbox is rectangular, so collateral fragments of OTHER parts can
+        # survive inside it (run-2 arm kept a tail-tip chunk that then waved
+        # with the arm). A rigid part is one blob: keep only components ≥25%
+        # the size of the largest.
+        ncc, cc, stats, _ = cv2.connectedComponentsWithStats((m > 0).astype(np.uint8))
+        if ncc > 2:
+            areas = stats[1:, cv2.CC_STAT_AREA]
+            keep = 1 + np.flatnonzero(areas >= 0.25 * areas.max())
+            dropped = int(m[~np.isin(cc, keep) & (m > 0)].size)
+            if dropped:
+                m = np.where(np.isin(cc, keep), m, 0).astype(np.uint8)
+                print(f"  {name}: dropped {dropped}px of collateral fragments ({ncc-1-len(keep)} components)")
         emit(name, cut_part(frame(b), m), z, [b, a])
         z += 1
 
