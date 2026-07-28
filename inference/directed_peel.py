@@ -119,6 +119,49 @@ def get_flatten_caption(image_vlm: Image.Image, step: int, cfg: Config, output_f
     return caption or None
 
 
+def get_fallback_caption(image_vlm: Image.Image, step: int, cfg: Config, output_folders: Dict[str, str], logger) -> Optional[str]:
+    """Unguarded top-layer caption, used when the constrained flatten prompt
+    returns empty but the flat-check still says NO.
+
+    Run 4: the VLM over-applied FLATTEN_CONSTRAINT to facial features (eyes,
+    mouth read as part of 'head') and returned empty while details remained, so
+    the face rode the base and the head peel got crown only. The fallback asks
+    with the plain DEFAULT_PROMPT; if the answer names a body part we return
+    None (ending flatten) — the constraint's purpose (run 1's destroyed arm
+    diff) still holds.
+    """
+    fallback_path = os.path.join(output_folders["vlm"], f"vlm_response_{step}_fallback.json")
+
+    def generate():
+        raw = detect_top_layer(
+            image_vlm, cfg.vlm_model_name, False,
+            prompt_override=DEFAULT_PROMPT, logger=logger,
+        )
+        return {
+            "description": extract_tag_content("description", raw),
+            "think": extract_tag_content("think", raw),
+            "caption": extract_tag_content("caption", raw),
+        }
+
+    response = load_or_generate(
+        file_path=fallback_path,
+        generate_func=generate,
+        save_func=save_json,
+        load_func=load_json,
+        logger=logger,
+        description=f"fallback (unguarded) VLM response for step {step}",
+    )
+    caption = ((response or {}).get("caption") or "").strip()
+    if not caption:
+        logger.info(f"Step {step}: fallback caption also empty; ending flatten phase.")
+        return None
+    if BODY_PART_RE.search(caption):
+        logger.info(f"Step {step}: fallback caption names a body part ({caption!r}); refusing it and ending flatten phase.")
+        return None
+    logger.info(f"Step {step}: using fallback caption {caption!r}")
+    return caption
+
+
 def is_flat_base(image_vlm: Image.Image, step: int, cfg: Config, output_folders: Dict[str, str], logger) -> bool:
     """Ask the VLM whether flattening is complete. Conservative on failure: not flat."""
     check_path = os.path.join(output_folders["vlm"], f"flat_check_{step}.json")
@@ -228,6 +271,10 @@ def flatten_phase(pipeline, image: Image.Image, plan: Dict, cfg: Config,
 
         t0 = time.time()
         caption = get_flatten_caption(image_vlm, step, cfg, output_folders, logger)
+        if not caption and mode == "auto":
+            # Flat-check said NO this iteration but the constrained prompt
+            # returned empty — the run-4 early-stop. Ask again unguarded.
+            caption = get_fallback_caption(image_vlm, step, cfg, output_folders, logger)
         if not caption:
             logger.info(f"Step {step}: flatten VLM returned no caption (only body parts left, or failure). Ending flatten phase.")
             break
