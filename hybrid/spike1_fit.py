@@ -238,67 +238,205 @@ def fit_clip(name, args):
     return imgs, grays, masks, parts, report, curves, T
 
 
+# -------------------------------------------------------------- integrity
+# Mechanical checks BEFORE any perceptual metric (doctrine 2026-07-29:
+# "local SSIM 0.63 cannot distinguish a soft fit from a part that flew
+# off-screen"). Thresholds calibrated on the first spike-1 run: clean
+# parts sit at <= 4px jitter, garbage at 21-2112px — wide gap, 10px cut.
+JITTER_MAX_PX = 10.0
+IOU_MED_MIN = 0.5
+IOU_BAD = 0.3          # per-frame IoU below this counts as a bad frame
+IOU_BAD_FRAC = 0.2
+INFRAME_MIN = 0.8      # warped-mask area / expected area (off-screen loss)
+INFRAME_BAD_FRAC = 0.1
+LOST_FRAC_MAX = 0.3
+ADJ_BREAK_FRAC = 0.25
+
+
+def warp_part_masks(masks, curves, T, shape=(512, 512)):
+    """Frame-0 mask of each fitted part pushed through its curve."""
+    H, W = shape
+    out = {}
+    for p, fits in curves.items():
+        m0 = masks[p][0].astype(np.uint8) * 255
+        out[p] = [cv2.warpAffine(
+            m0, compose_D(*[c[t] for c in fits])[:2], (W, H)) > 128
+            for t in range(T)]
+    return out
+
+
+def integrity(masks, parts, curves, warped, report, T):
+    """Per part-frame: warped mask overlaps its SAM2 mask (IoU), lands
+    inside frame, centroid tracks the mask centroid, and frame-0
+    adjacencies survive the warp. Part verdict: fittable or not, with
+    plain-language reasons."""
+    kern = np.ones((7, 7), np.uint8)
+    d0 = {p: cv2.dilate(masks[p][0].astype(np.uint8), kern).astype(bool)
+          for p in curves}
+    names = [p for p in parts if p in curves]
+    pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1:]
+             if (d0[a] & d0[b]).sum() > 30]
+    adj_breaks = {p: 0 for p in curves}
+    for t in range(T):
+        wd = {p: cv2.dilate(warped[p][t].astype(np.uint8), kern)
+              for p in curves}
+        for a, b in pairs:
+            if not (wd[a].astype(bool) & wd[b].astype(bool)).any():
+                adj_breaks[a] += 1
+                adj_breaks[b] += 1
+    out = {}
+    for p in curves:
+        area0 = float(masks[p][0].sum())
+        sc = curves[p][1]
+        ious, inframe, cerr = [], [], []
+        for t in range(T):
+            w = warped[p][t]
+            inframe.append(w.sum() / max(area0 * sc[t] ** 2, 1.0))
+            mt = masks[p][t]
+            if mt.sum() < MIN_VISIBLE_PX:
+                ious.append(np.nan)
+                cerr.append(np.nan)
+                continue
+            ious.append((w & mt).sum() / max((w | mt).sum(), 1))
+            ys, xs = np.nonzero(mt)
+            cm = np.array([xs.mean(), ys.mean()])
+            if w.sum() > 0:
+                ys, xs = np.nonzero(w)
+                cerr.append(float(np.hypot(
+                    *(np.array([xs.mean(), ys.mean()]) - cm))))
+            else:
+                cerr.append(512.0)
+        iou = np.asarray(ious, float)
+        inf = np.asarray(inframe, float)
+        vis = ~np.isnan(iou)
+        r = report[p]
+        reasons = []
+        if r["jitter_rms_px"] > JITTER_MAX_PX:
+            reasons.append(f"jitter {r['jitter_rms_px']:.0f}px")
+        if vis.any() and np.nanmedian(iou) < IOU_MED_MIN:
+            reasons.append(f"IoU med {np.nanmedian(iou):.2f}")
+        if vis.any() and (iou[vis] < IOU_BAD).mean() > IOU_BAD_FRAC:
+            reasons.append(
+                f"IoU<{IOU_BAD} on {(iou[vis] < IOU_BAD).mean():.0%} frames")
+        if (inf < INFRAME_MIN).mean() > INFRAME_BAD_FRAC:
+            reasons.append(f"off-frame on {(inf < INFRAME_MIN).mean():.0%}")
+        if r["frames_lost"] / T > LOST_FRAC_MAX:
+            reasons.append(f"ECC lost {r['frames_lost']}/{T} frames")
+        if adj_breaks[p] / T > ADJ_BREAK_FRAC:
+            reasons.append(f"detaches on {adj_breaks[p]}/{T} frames")
+        out[p] = {
+            "fittable": not reasons, "reasons": reasons,
+            "iou_med": float(np.nanmedian(iou)) if vis.any() else None,
+            "iou_min": float(np.nanmin(iou)) if vis.any() else None,
+            "centroid_err_med_px":
+                float(np.nanmedian(cerr)) if vis.any() else None,
+            "inframe_min": float(inf.min()),
+            "adjacency_breaks": int(adj_breaks[p]),
+        }
+    return out
+
+
 # --------------------------------------------------------------- rerender
 
-def rerender(name, imgs, masks, parts, curves, T):
+def build_plate(imgs, union):
+    """Character-free background plate, TWO passes. Pass 1: per-pixel
+    median over frames where the SAM2 union (dilated) is absent. Pass 2:
+    pixels where any frame still differs strongly from the pass-1 plate
+    are character pixels SAM2 MISSED (the adrock arm-residue bug) — add
+    them to the union and re-median. Never-uncovered pixels inpainted."""
+    stack = np.stack(imgs).astype(float)
+
+    def median_plate(u):
+        ma = np.ma.masked_array(stack, mask=np.repeat(u[..., None], 3, -1))
+        pl = np.ma.median(ma, axis=0)
+        hole = np.all(pl.mask, axis=-1) if np.ma.is_masked(pl) else \
+            np.zeros(pl.shape[:2], bool)
+        pl = pl.filled(0).astype(np.uint8)
+        if hole.any():
+            pl = cv2.inpaint(pl, hole.astype(np.uint8) * 255, 5,
+                             cv2.INPAINT_TELEA)
+        return pl
+
+    plate = median_plate(union)
+    aug = union.copy()
+    pf = plate.astype(float)
+    for t in range(len(imgs)):
+        diff = (np.abs(stack[t] - pf).max(-1) > 40).astype(np.uint8)
+        diff = cv2.morphologyEx(diff, cv2.MORPH_OPEN,
+                                np.ones((3, 3), np.uint8))
+        aug[t] |= cv2.dilate(diff, np.ones((5, 5), np.uint8)).astype(bool)
+    return median_plate(aug)
+
+
+def rerender(name, imgs, masks, parts, curves, warped, integ, T):
     """The rig hypothesis made visible: frame-0 parts warped by their
     fitted curves, composited in z-order over a CHARACTER-FREE background
     plate. Region-local worst-frame SSIM per part = the perceptual verdict.
 
-    Plate = per-pixel median over frames where the character (union of part
-    masks, dilated) is absent; never-uncovered pixels are inpainted. A
-    naive whole-frame median keeps the character wherever it dwells — the
-    first superman bench double-exposed plate-Perry with warped-Perry and
-    the SSIM collapse was the harness, not the fit."""
+    Integrity-gated (doctrine 2026-07-29): a part whose curve failed its
+    own mechanical checks is NOT drawn — the frame is stamped
+    'OMITTED: part (reason)' so harness garbage can never masquerade as
+    a thesis verdict. Every SSIM is reported next to the clip's own
+    adjacent-frame ceiling: the fit can't beat the clip's noise floor."""
     T_ = len(imgs)
     union = np.stack([np.any([masks[p][t] for p in parts], axis=0)
                       for t in range(T_)])
     union = np.stack([cv2.dilate(u.astype(np.uint8),
                                  np.ones((5, 5), np.uint8)) for u in union]
                      ).astype(bool)
-    stack = np.stack(imgs).astype(float)
-    ma = np.ma.masked_array(stack, mask=np.repeat(union[..., None], 3, -1))
-    plate = np.ma.median(ma, axis=0)
-    hole = np.all(plate.mask, axis=-1) if np.ma.is_masked(plate) else \
-        np.zeros(plate.shape[:2], bool)
-    plate = plate.filled(0).astype(np.uint8)
-    if hole.any():
-        plate = cv2.inpaint(plate, hole.astype(np.uint8) * 255, 5,
-                            cv2.INPAINT_TELEA)
+    plate = build_plate(imgs, union)
     rdir = CLIPS / name / "render"
     rdir.mkdir(exist_ok=True)
     f0 = imgs[0]
-    local = {p: [] for p in parts if p in curves}
+    drawn = [p for p in parts if p in curves and integ[p]["fittable"]]
+    omitted = [p for p in curves if not integ[p]["fittable"]]
+    stamp = "OMITTED: " + ", ".join(
+        f"{p} ({integ[p]['reasons'][0]})" for p in omitted) if omitted else ""
+    local = {p: [] for p in drawn}
     glob_ssim, coverage = [], []
+    grays_og = [cv2.cvtColor(im, cv2.COLOR_BGR2GRAY) for im in imgs]
     for t in range(T):
         out = plate.copy()
         wunion = np.zeros((512, 512), bool)
-        for p in parts:
-            if p not in curves:
-                continue
-            th, sc, tx, ty = [c[t] for c in curves[p]]
-            D = compose_D(th, sc, tx, ty)[:2]
+        for p in drawn:
+            D = compose_D(*[c[t] for c in curves[p]])[:2]
             wp = cv2.warpAffine(f0, D, (512, 512))
-            wm = cv2.warpAffine(masks[p][0].astype(np.uint8) * 255, D,
-                                (512, 512)) > 128
+            wm = warped[p][t]
             out[wm] = wp[wm]
             wunion |= wm
-        cv2.imwrite(str(rdir / f"frame_{t:04d}.png"), out)
         if union[t].any():
             coverage.append(float((union[t] & wunion).sum() / union[t].sum()))
-        og = cv2.cvtColor(imgs[t], cv2.COLOR_BGR2GRAY)
         rg = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-        glob_ssim.append(ssim_fn(rg, og))
+        glob_ssim.append(ssim_fn(rg, grays_og[t]))
         for p in local:
             m = masks[p][t] if masks[p][t].sum() > 100 else masks[p][0]
-            x0, y0, x1, y1 = part_bbox(m, og.shape, margin=16)
-            local[p].append(ssim_fn(rg[y0:y1, x0:x1], og[y0:y1, x0:x1]))
+            x0, y0, x1, y1 = part_bbox(m, grays_og[t].shape, margin=16)
+            local[p].append(ssim_fn(rg[y0:y1, x0:x1],
+                                    grays_og[t][y0:y1, x0:x1]))
+        if stamp:
+            cv2.putText(out, stamp, (8, 502), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45, (0, 0, 255), 1, cv2.LINE_AA)
+        cv2.imwrite(str(rdir / f"frame_{t:04d}.png"), out)
+    # per-clip ceilings: adjacent-frame SSIM med (global and per part
+    # bbox) — the clip's own noise floor; report fits as delta from it
+    adj_g, adj_l = [], {p: [] for p in local}
+    for t in range(T - 1):
+        adj_g.append(ssim_fn(grays_og[t + 1], grays_og[t]))
+        for p in local:
+            m = masks[p][t] if masks[p][t].sum() > 100 else masks[p][0]
+            x0, y0, x1, y1 = part_bbox(m, grays_og[t].shape, margin=16)
+            adj_l[p].append(ssim_fn(grays_og[t + 1][y0:y1, x0:x1],
+                                    grays_og[t][y0:y1, x0:x1]))
+    ceil_g = float(np.median(adj_g))
     bench = {"ssim_mean": float(np.mean(glob_ssim)),
              "ssim_min": float(np.min(glob_ssim)),
+             "ceiling_global": ceil_g,
              "coverage_mean": float(np.mean(coverage)),
              "coverage_min": float(np.min(coverage)),
+             "omitted": {p: integ[p]["reasons"] for p in omitted},
              "local": {p: {"ssim_min": float(np.min(v)),
                            "ssim_med": float(np.median(v)),
+                           "ceiling": float(np.median(adj_l[p])),
                            "worst_frame": int(np.argmin(v))}
                        for p, v in local.items()}}
     # side-by-side sheet, every 6th frame: render | original
@@ -315,7 +453,47 @@ def rerender(name, imgs, masks, parts, curves, T):
     rows = [cv2.copyMakeBorder(r, 0, 0, 0, w - r.shape[1],
                                cv2.BORDER_CONSTANT) for r in rows]
     cv2.imwrite(str(CLIPS / name / "render_sheet.png"), np.vstack(rows))
+    write_eyeball_artifacts(name, imgs, masks, rdir, drawn, T)
     return bench
+
+
+def write_eyeball_artifacts(name, imgs, masks, rdir, drawn, T):
+    """Claude's appraisal-gate inputs (watched BEFORE Lewis sees anything):
+    render|original GIF at full cycle, plus a dense per-part crop sheet —
+    EVERY frame, part bbox, 2x nearest-neighbour, render over original."""
+    from PIL import Image
+    pil = []
+    for t in range(T):
+        r = cv2.imread(str(rdir / f"frame_{t:04d}.png"))
+        pair = np.hstack([r, imgs[t]])
+        cv2.putText(pair, f"f{t}", (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                    (0, 0, 255), 2)
+        pil.append(Image.fromarray(cv2.cvtColor(
+            cv2.resize(pair, (768, 384)), cv2.COLOR_BGR2RGB)))
+    pil[0].save(str(CLIPS / name / "eyeball.gif"), save_all=True,
+                append_images=pil[1:], duration=80, loop=0)
+    for p in drawn:
+        x0, y0, x1, y1 = part_bbox(np.any(masks[p], axis=0),
+                                   imgs[0].shape[:2], margin=12)
+        cw, ch = x1 - x0, y1 - y0
+        s = max(1, int(round(128 / max(cw, ch))))  # >=2x for small parts
+        tiles = []
+        for t in range(T):
+            r = cv2.imread(str(rdir / f"frame_{t:04d}.png"))[y0:y1, x0:x1]
+            o = imgs[t][y0:y1, x0:x1]
+            pair = np.vstack([r, o])
+            pair = cv2.resize(pair, (cw * s, 2 * ch * s),
+                              interpolation=cv2.INTER_NEAREST)
+            cv2.putText(pair, str(t), (2, 14), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.4, (0, 0, 255), 1)
+            tiles.append(pair)
+        per_row = max(1, 2048 // (cw * s))
+        rows = [np.hstack(tiles[i:i + per_row])
+                for i in range(0, len(tiles), per_row)]
+        w = max(r_.shape[1] for r_ in rows)
+        rows = [cv2.copyMakeBorder(r_, 0, 0, 0, w - r_.shape[1],
+                                   cv2.BORDER_CONSTANT) for r_ in rows]
+        cv2.imwrite(str(CLIPS / name / f"crops_{p}.png"), np.vstack(rows))
 
 
 def main():
@@ -331,22 +509,33 @@ def main():
                if (d / "part_masks.npz").exists())
     for name in names:
         imgs, grays, masks, parts, report, curves, T = fit_clip(name, args)
-        bench = rerender(name, imgs, masks, parts, curves, T)
-        out = {"fit": report, "bench": bench, "motion": args.motion}
+        warped = warp_part_masks(masks, curves, T)
+        integ = integrity(masks, parts, curves, warped, report, T)
+        bench = rerender(name, imgs, masks, parts, curves, warped, integ, T)
+        out = {"fit": report, "integrity": integ, "bench": bench,
+               "motion": args.motion}
         (CLIPS / name / "spike1_report.json").write_text(
             json.dumps(out, indent=1))
-        print(f"== {name} (T={T})  global SSIM {bench['ssim_mean']:.4f}")
+        print(f"== {name} (T={T})  global SSIM {bench['ssim_mean']:.4f} "
+              f"(clip ceiling {bench['ceiling_global']:.4f})")
         for p in parts:
             r = report[p]
             if "skipped" in r:
                 print(f"  {p:10s} SKIPPED ({r['skipped']})")
                 continue
+            ig = integ[p]
+            if not ig["fittable"]:
+                print(f"  {p:10s} UNFITTABLE — {'; '.join(ig['reasons'])} "
+                      f"(cc_med {r['cc_med']:.3f}, centroid err "
+                      f"{ig['centroid_err_med_px']:.1f}px)")
+                continue
             lb = bench["local"].get(p, {})
             print(f"  {p:10s} cc min/p10/med {r['cc_min']:.3f}/{r['cc_p10']:.3f}"
-                  f"/{r['cc_med']:.3f} | jitter {r['jitter_rms_px']:.2f}px "
-                  f"(p95 {r['jitter_p95_px']:.2f}) | lost {r['frames_lost']} | "
-                  f"local SSIM min {lb.get('ssim_min', float('nan')):.3f} "
+                  f"/{r['cc_med']:.3f} | jitter {r['jitter_rms_px']:.2f}px | "
+                  f"IoU med {ig['iou_med']:.2f} | "
+                  f"lSSIM min {lb.get('ssim_min', float('nan')):.3f} "
                   f"med {lb.get('ssim_med', float('nan')):.3f} "
+                  f"(ceil {lb.get('ceiling', float('nan')):.3f}) "
                   f"@f{lb.get('worst_frame', -1)}")
 
 
