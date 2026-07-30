@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>appraisal sandbox — oracle runs</title>
+
+<style>
+/* Quiet mid-grey shell: the artifacts sit on checkerboard and carry all
+   the colour, so the page must not compete with them. */
+:root {
+  --bg: #2a2c2f;
+  --panel: #232528;
+  --line: #3a3d41;
+  --ink: #d7d9dc;
+  --dim: #8f949a;
+  --dimmer: #6d7278;
+  --accent: #9fb8cf;
+  --ok: #7fa88a;
+  --warn: #c2a96b;
+  --bad: #bc7f7f;
+  --h: 232px;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 12.5px/1.5 ui-sans-serif, -apple-system, "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+#shell { display: grid; grid-template-columns: 224px 1fr; min-height: 100vh; }
+
+/* --- left rail: waves, newest first --- */
+#rail {
+  border-right: 1px solid var(--line); background: var(--panel);
+  padding: 14px 0; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+}
+#rail h1 {
+  font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--dimmer); margin: 0 16px 12px;
+}
+.wavebtn {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  color: var(--dim); padding: 8px 16px; cursor: pointer; font: inherit;
+  border-left: 2px solid transparent;
+}
+.wavebtn:hover { color: var(--ink); background: #00000018; }
+.wavebtn.on { color: var(--ink); border-left-color: var(--accent); background: #00000024; }
+.wavebtn b { display: block; font-weight: 500; }
+.wavebtn span { color: var(--dimmer); font-size: 11px; }
+#railfoot {
+  margin: 16px; padding-top: 12px; border-top: 1px solid var(--line);
+  color: var(--dimmer); font-size: 11px;
+}
+#railfoot label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+
+/* --- main --- */
+#main { padding: 18px 22px 80px; min-width: 0; }
+#head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+#head h2 { font-size: 15px; font-weight: 500; margin: 0; }
+#head .date { color: var(--dimmer); }
+#note { color: var(--dim); margin: 6px 0 18px; max-width: 78ch; }
+
+.mascot-group { margin-bottom: 26px; }
+.mascot-group > h3 {
+  font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--dimmer); margin: 0 0 8px; padding-bottom: 5px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* --- run card: input | animation | metadata --- */
+.card {
+  display: grid; grid-template-columns: auto auto minmax(280px, 1fr);
+  gap: 14px; align-items: start;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  padding: 10px; margin-bottom: 10px;
+}
+.card figure { margin: 0; }
+.card figcaption {
+  font-size: 10px; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--dimmer); margin-top: 4px; text-align: center;
+}
+/* identical height on both images is the whole point — identity drift is
+   judged by flicking the eye sideways, not by mental rescaling */
+.card img.frame {
+  height: var(--h); width: auto; display: block; border-radius: 3px;
+  background: #1c1e20; cursor: zoom-in;
+}
+.meta { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.meta .idline { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.meta .rid { font-weight: 600; color: var(--ink); }
+.meta .rname { color: var(--dim); font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+.meta .spec { color: var(--dimmer); font-size: 11px; }
+
+.prompt {
+  color: var(--dim); font-size: 11.5px; cursor: pointer;
+  border-left: 2px solid var(--line); padding-left: 8px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.prompt.open { -webkit-line-clamp: unset; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip {
+  font-family: ui-monospace, Menlo, monospace; font-size: 10.5px;
+  border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; color: var(--dim);
+}
+.chip i { font-style: normal; color: var(--dimmer); }
+.chip.ok { border-color: #3f5a48; color: var(--ok); }
+.chip.warn { border-color: #5c5233; color: var(--warn); }
+.chip.bad { border-color: #5e3b3b; color: var(--bad); }
+
+.verdict { font-size: 11.5px; }
+.verdict > b {
+  display: block; font-size: 10px; font-weight: 600; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--dimmer);
+}
+.verdict.claude p, .verdict.lewis p {
+  margin: 1px 0 0; display: -webkit-box; -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical; overflow: hidden; cursor: pointer;
+}
+.verdict p.open { -webkit-line-clamp: unset; }
+.verdict.lewis p { color: #cdd6dd; }
+.verdict.lewis.awaiting p { color: var(--warn); font-style: italic; }
+
+.links { display: flex; gap: 10px; font-size: 11px; margin-top: auto; padding-top: 2px; }
+.missing { color: var(--dimmer); font-size: 11px; }
+
+/* --- lightbox --- */
+#box {
+  position: fixed; inset: 0; background: #14151799; backdrop-filter: blur(3px);
+  display: none; align-items: center; justify-content: center; z-index: 9; cursor: zoom-out;
+}
+#box.on { display: flex; }
+#box img { max-width: 96vw; max-height: 94vh; border-radius: 4px; }
+#stamp {
+  position: fixed; right: 10px; bottom: 8px; color: var(--dimmer); font-size: 10.5px;
+  font-family: ui-monospace, Menlo, monospace;
+}
+</style>
+
+<div id="shell">
+  <nav id="rail">
+    <h1>Waves</h1>
+    <div id="wavelist"></div>
+    <div id="railfoot">
+      <label><input type="checkbox" id="onlyawait"> awaiting appraisal only</label>
+      <div id="tally" style="margin-top:8px"></div>
+    </div>
+  </nav>
+  <main id="main">
+    <div id="head"></div>
+    <div id="note"></div>
+    <div id="runs"></div>
+  </main>
+</div>
+<div id="box"><img alt=""></div>
+<div id="stamp"></div>
+
+<script>
+// State. `cards` caches a DOM node per run dir so a manifest poll that
+// changes one run does not tear down and re-create the other GIFs —
+// re-creating an <img> restarts its loop, which makes a comparison sweep
+// across a wave impossible.
+let manifest = null, sig = null, activeWave = null;
+const cards = new Map();
+
+const $ = s => document.querySelector(s);
+const el = (tag, cls, txt) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (txt != null) n.textContent = txt;
+  return n;
+};
+
+function num(v, digits) {
+  return (v == null || isNaN(v)) ? null : Number(v).toFixed(digits);
+}
+function grade(v, good, bad, invert) {
+  if (v == null || isNaN(v)) return "";
+  return invert
+    ? (v <= good ? "ok" : v <= bad ? "warn" : "bad")
+    : (v >= good ? "ok" : v >= bad ? "warn" : "bad");
+}
+function chip(label, value, cls) {
+  const c = el("span", "chip " + (cls || ""));
+  c.appendChild(el("i", null, label + " "));
+  c.appendChild(document.createTextNode(value));
+  return c;
+}
+
+function isAwaiting(run) {
+  const v = (run.ledger && run.ledger.lewis || "").trim();
+  return !v || v === "—" || v === "-" || v === "–";
+}
+
+// A run's own signature: only its own card is rebuilt when this changes.
+function runSig(run) {
+  return JSON.stringify([run.mtime, run.ledger, run.prompt, run.gates]);
+}
+
+function buildCard(run) {
+  const card = el("div", "card");
+
+  const inFig = el("figure");
+  if (run.mascot_url) {
+    const im = el("img", "frame");
+    im.src = run.mascot_url; im.alt = run.mascot + " input";
+    im.onclick = () => zoom(im.src);
+    inFig.appendChild(im);
+    inFig.appendChild(el("figcaption", null, "input"));
+  } else {
+    inFig.appendChild(el("div", "missing", "no input image"));
+  }
+  card.appendChild(inFig);
+
+  const gifFig = el("figure");
+  if (run.gif) {
+    const g = el("img", "frame");
+    g.src = run.gif; g.alt = run.dir + " animation"; g.loading = "eager";
+    g.onclick = () => zoom(g.src);
+    gifFig.appendChild(g);
+    gifFig.appendChild(el("figcaption", null, "matted loop"));
+  } else {
+    gifFig.appendChild(el("div", "missing", "no gif"));
+  }
+  card.appendChild(gifFig);
+
+  const meta = el("div", "meta");
+  const L = run.ledger || {}, G = run.gates || {};
+
+  const idline = el("div", "idline");
+  idline.appendChild(el("span", "rid", run.ledger_id || "—"));
+  idline.appendChild(el("span", "rname", run.dir));
+  const spec = [L.model, L.res, L.frames && L.frames + "f",
+                L.cost, L.lottie_kb && L.lottie_kb + " KB",
+                (run.seed != null ? "seed " + run.seed : null)]
+    .filter(Boolean).join("  ·  ");
+  idline.appendChild(el("span", "spec", spec));
+  meta.appendChild(idline);
+
+  if (run.prompt) {
+    const p = el("div", "prompt", run.prompt);
+    p.title = "click to expand";
+    p.onclick = () => p.classList.toggle("open");
+    meta.appendChild(p);
+  }
+
+  const chips = el("div", "chips");
+  const ss = num(G.loop_ssim, 3), iou = num(G.loop_alpha_iou, 3);
+  if (ss) chips.appendChild(chip("loop SSIM", ss, grade(G.loop_ssim, 0.97, 0.94)));
+  if (iou) chips.appendChild(chip("IoU", iou, grade(G.loop_alpha_iou, 0.97, 0.93)));
+  if (num(G.color_dL_max, 1))
+    chips.appendChild(chip("dL max", num(G.color_dL_max, 1), grade(G.color_dL_max, 6, 12, true)));
+  if (num(G.color_dL_cliff, 1))
+    chips.appendChild(chip("dL cliff", num(G.color_dL_cliff, 1), grade(G.color_dL_cliff, 4, 7, true)));
+  if (num(G.jerk_rms, 2))
+    chips.appendChild(chip("jerk", num(G.jerk_rms, 2), grade(G.jerk_rms, 1, 3, true)));
+  if (num(G.velocity_p95, 1))
+    chips.appendChild(chip("vel p95", num(G.velocity_p95, 1), ""));
+  if (chips.children.length) meta.appendChild(chips);
+
+  if (L.claude) {
+    const v = el("div", "verdict claude");
+    v.appendChild(el("b", null, "Claude pre-verdict"));
+    const p = el("p", null, L.claude);
+    p.onclick = () => p.classList.toggle("open");
+    v.appendChild(p);
+    meta.appendChild(v);
+  }
+  const lv = el("div", "verdict lewis" + (isAwaiting(run) ? " awaiting" : ""));
+  lv.appendChild(el("b", null, "Lewis verdict"));
+  const lp = el("p", null, isAwaiting(run) ? "awaiting appraisal" : L.lewis);
+  lp.onclick = () => lp.classList.toggle("open");
+  lv.appendChild(lp);
+  meta.appendChild(lv);
+
+  const links = el("div", "links");
+  const add = (label, href) => {
+    if (!href) return;
+    const a = el("a", null, "[" + label + "]");
+    a.href = href; a.target = "_blank";
+    links.appendChild(a);
+  };
+  add("sheet", run.sheet); add("gates", run.gates_png);
+  add("mp4", run.mp4); add("lottie", run.lottie);
+  meta.appendChild(links);
+
+  card.appendChild(meta);
+  return card;
+}
+
+function zoom(src) {
+  const box = $("#box");
+  box.querySelector("img").src = src;
+  box.classList.add("on");
+}
+$("#box").onclick = () => $("#box").classList.remove("on");
+addEventListener("keydown", e => { if (e.key === "Escape") $("#box").classList.remove("on"); });
+
+function renderRail() {
+  const list = $("#wavelist");
+  list.textContent = "";
+  manifest.waves.forEach(w => {
+    const b = el("button", "wavebtn" + (w.id === activeWave ? " on" : ""));
+    b.appendChild(el("b", null, w.title));
+    const nAwait = w.runs.filter(isAwaiting).length;
+    b.appendChild(el("span", null,
+      [w.date, w.runs.length + " runs", nAwait ? nAwait + " awaiting" : null]
+        .filter(Boolean).join(" · ")));
+    b.onclick = () => { activeWave = w.id; render(); };
+    list.appendChild(b);
+  });
+  const tot = manifest.waves.reduce((a, w) => a + w.runs.length, 0);
+  const aw = manifest.waves.reduce((a, w) => a + w.runs.filter(isAwaiting).length, 0);
+  $("#tally").textContent = tot + " runs total · " + aw + " awaiting";
+}
+
+function render() {
+  if (!manifest || !manifest.waves.length) {
+    $("#head").textContent = "no runs found";
+    return;
+  }
+  if (!manifest.waves.some(w => w.id === activeWave)) activeWave = manifest.waves[0].id;
+  renderRail();
+  const w = manifest.waves.find(x => x.id === activeWave);
+
+  const head = $("#head");
+  head.textContent = "";
+  head.appendChild(el("h2", null, w.title));
+  head.appendChild(el("span", "date", w.date));
+  $("#note").textContent = w.note || "";
+
+  const onlyAwait = $("#onlyawait").checked;
+  const runs = onlyAwait ? w.runs.filter(isAwaiting) : w.runs;
+
+  // Group by mascot, preserving first-appearance order within the wave.
+  const groups = new Map();
+  runs.forEach(r => {
+    if (!groups.has(r.mascot)) groups.set(r.mascot, []);
+    groups.get(r.mascot).push(r);
+  });
+
+  const host = $("#runs");
+  host.textContent = "";
+  if (w.missing && w.missing.length)
+    host.appendChild(el("div", "missing", "declared but not on disk: " + w.missing.join(", ")));
+  groups.forEach((list, mascot) => {
+    const sec = el("section", "mascot-group");
+    sec.appendChild(el("h3", null, mascot + " — " + list.length + " runs"));
+    list.forEach(run => {
+      const key = run.dir, s = runSig(run);
+      let node = cards.get(key);
+      if (!node || node.dataset.sig !== s) {
+        node = buildCard(run);
+        node.dataset.sig = s;
+        cards.set(key, node);
+      }
+      sec.appendChild(node); // moving an existing node keeps its GIF running
+    });
+    host.appendChild(sec);
+  });
+}
+
+$("#onlyawait").onchange = render;
+
+async function poll() {
+  try {
+    const r = await fetch("/api/manifest", { cache: "no-store" });
+    const m = await r.json();
+    if (m.signature !== sig) {
+      sig = m.signature;
+      manifest = m;
+      render();
+    }
+    $("#stamp").textContent = "synced " + new Date().toLocaleTimeString();
+  } catch (e) {
+    $("#stamp").textContent = "server offline";
+  }
+}
+poll();
+setInterval(poll, 4000);
+</script>
+</html>
