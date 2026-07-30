@@ -1,4 +1,8 @@
-"""Spike 2 — maximalist oracle: mascot image -> Wan i2v -> matte -> frame-seq
+"""Spike 2 — maximalist oracle: (NB: appraisal GIFs and packs now use the
+measured mp4 fps — the 2026-07-30 half-speed viewer bug poisoned all
+wave 1-3 pacing verdicts; never hardcode fps.)
+
+Spike 2 — maximalist oracle: mascot image -> Wan i2v -> matte -> frame-seq
 Lottie ("the owl mechanism", decoded at workorder birth).
 
 One invocation = one generation = one ledger row. The ledger
@@ -172,7 +176,7 @@ def pack_lottie(rgba_frames, size, fps, path):
     return path.stat().st_size
 
 
-def eyeball(rgba_frames, rdir, name):
+def eyeball(rgba_frames, rdir, name, fps=32):
     """GIF over checkerboard (alpha made visible) + contact sheet."""
     from PIL import Image
     tiles, pil = [], []
@@ -192,7 +196,7 @@ def eyeball(rgba_frames, rdir, name):
                         (0, 0, 255), 1)
             tiles.append(t)
     pil[0].save(str(rdir / f"{name}.gif"), save_all=True,
-                append_images=pil[1:], duration=62, loop=0)
+                append_images=pil[1:], duration=int(1000 / fps), loop=0)
     rows = [np.hstack(tiles[i:i + 8]) for i in range(0, len(tiles), 8)]
     w = max(r.shape[1] for r in rows)
     rows = [cv2.copyMakeBorder(r, 0, 0, 0, w - r.shape[1],
@@ -252,10 +256,16 @@ def main():
     urllib.request.urlretrieve(video_url, mp4)
     (rdir / "response.json").write_text(json.dumps(res, indent=1))
     frames = extract_frames(mp4, rdir / "frames")
+    fps_raw = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v",
+         "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", str(mp4)],
+        capture_output=True, text=True).stdout.strip()
+    num, den = fps_raw.split("/")
+    fps = round(int(num) / int(den))
     rgba = matte(frames, rdir / "rgba")
     size = cv2.imread(str(frames[0])).shape[0]
-    kb = pack_lottie(rgba, size, 16, rdir / f"{args.name}.json") // 1024
-    eyeball(rgba, rdir, args.name)
+    kb = pack_lottie(rgba, size, fps, rdir / f"{args.name}.json") // 1024
+    eyeball(rgba, rdir, args.name, fps)
     rid = ledger_row(args, res, len(frames), kb, dur)
     print(f"== {rid} {args.name}: {len(frames)} frames, lottie {kb}KB, "
           f"gen {dur:.0f}s, seed {res.get('seed')}")
