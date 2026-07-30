@@ -79,6 +79,21 @@
     "raccoon-jig-bs-s3",
     "raccoon-jig-full"
    ]
+  },
+  {
+   "id": "wave-3",
+   "title": "Wave 3 \u2014 BLIND beatsheets (celebrate/sulk/sleepy), pacing probe, 720p eyes, star debut",
+   "date": "2026-07-30",
+   "note": "Briefs committed before generation, no retries \u2014 the enshrinement test. Retimed variants auto-generated.",
+   "runs": [
+    "strawberry-celebrate",
+    "raccoon-celebrate",
+    "star-celebrate",
+    "strawberry-sulk",
+    "raccoon-sleepy",
+    "raccoon-jig-pace",
+    "strawberry-idle-720"
+   ]
   }
  ]
 }
