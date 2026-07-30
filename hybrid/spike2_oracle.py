@@ -37,12 +37,16 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-ENDPOINT = "fal-ai/wan/v2.2-a14b/image-to-video/turbo"
+ENDPOINTS = {
+    "turbo": "fal-ai/wan/v2.2-a14b/image-to-video/turbo",   # per-VIDEO price
+    "full": "fal-ai/wan/v2.2-a14b/image-to-video",          # per-second price
+}
 QUEUE = "https://queue.fal.run"
 ROOT = Path(__file__).resolve().parent.parent          # LayerPeeler/
 OUT = ROOT / "out" / "spike2"
 LEDGER = ROOT.parent / "docs" / "workorders" / "hybrid-oracle-spikes" / "ledger.md"
-PRICE = {"480p": 0.05, "580p": 0.075, "720p": 0.10}
+PRICE = {"turbo": {"480p": 0.05, "580p": 0.075, "720p": 0.10},
+         "full": {"480p": 0.20, "580p": 0.30, "720p": 0.40}}  # full = per-sec x ~5s
 
 
 def api(url, payload=None, key=None):
@@ -75,7 +79,7 @@ def generate(args, key):
         payload["end_image_url"] = payload["image_url"]
     if args.seed is not None:
         payload["seed"] = args.seed
-    sub = api(f"{QUEUE}/{ENDPOINT}", payload, key)
+    sub = api(f"{QUEUE}/{ENDPOINTS[args.tier]}", payload, key)
     status_url, response_url = sub["status_url"], sub["response_url"]
     print(f"queued: {sub.get('request_id')}")
     t0 = time.time()
@@ -100,9 +104,13 @@ def extract_frames(mp4, fdir):
 
 def matte(frames, mdir):
     """Flat-bg matte: bg color = median of border pixels per frame; alpha =
-    smoothstep on color distance; despeckle with morphology."""
+    smoothstep on color distance; despeckle with morphology. Character
+    pixels are color-normalized toward frame-0's mean Lab (global shift) —
+    kills the slow luminance drift Lewis caught in wave 1 ("like a cloud
+    passes over it"), which was also the only visible loop tell."""
     mdir.mkdir(parents=True, exist_ok=True)
     outs = []
+    ref_lab = None
     for fp in frames:
         im = cv2.imread(str(fp)).astype(np.float32)
         border = np.concatenate([im[:8].reshape(-1, 3), im[-8:].reshape(-1, 3),
@@ -126,6 +134,18 @@ def matte(frames, mdir):
             hard = (lab == big).astype(np.uint8)
         a = a * cv2.dilate(hard, np.ones((7, 7), np.uint8))
         rgba = np.dstack([im, a * 255]).astype(np.uint8)
+        # color-norm: shift character pixels' mean Lab to frame-0's
+        ch = rgba[..., 3] > 128
+        if ch.sum() > 100:
+            lab = cv2.cvtColor(rgba[..., :3], cv2.COLOR_BGR2LAB).astype(
+                np.float32)
+            mean = lab[ch].mean(0)
+            if ref_lab is None:
+                ref_lab = mean
+            else:
+                lab[ch] = np.clip(lab[ch] + (ref_lab - mean), 0, 255)
+                rgba[..., :3] = cv2.cvtColor(lab.astype(np.uint8),
+                                             cv2.COLOR_LAB2BGR)
         op = mdir / fp.name
         cv2.imwrite(str(op), rgba)
         outs.append(op)
@@ -197,8 +217,8 @@ def ledger_row(args, res, n_frames, lottie_kb, dur_s):
     LEDGER.write_text(LEDGER.read_text() + (
         f"| {rid} | {time.strftime('%Y-%m-%d')} | "
         f"{Path(args.image).stem}: \"{args.prompt[:60]}...\" | wan2.2-a14b-"
-        f"turbo | {args.resolution} | {seed} | {not args.no_loop} | "
-        f"${PRICE[args.resolution]:.3f} | {n_frames} | {lottie_kb} | "
+        f"{args.tier} | {args.resolution} | {seed} | {not args.no_loop} | "
+        f"${PRICE[args.tier][args.resolution]:.3f} | {n_frames} | {lottie_kb} | "
         f"{dur_s:.0f} | — | — | — |\n"))
     return rid
 
@@ -208,7 +228,9 @@ def main():
     ap.add_argument("--image", required=True)
     ap.add_argument("--name", required=True)
     ap.add_argument("--prompt", required=True)
-    ap.add_argument("--resolution", default="480p", choices=list(PRICE))
+    ap.add_argument("--resolution", default="480p",
+                    choices=["480p", "580p", "720p"])
+    ap.add_argument("--tier", default="turbo", choices=list(ENDPOINTS))
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--no-loop", action="store_true",
                     help="don't condition end frame on the input image")
@@ -216,8 +238,8 @@ def main():
     args = ap.parse_args()
     key = os.environ.get("FAL_KEY") or sys.exit("FAL_KEY not set")
     if args.dry_run:
-        print(json.dumps({"endpoint": ENDPOINT, "res": args.resolution,
-                          "cost": PRICE[args.resolution],
+        print(json.dumps({"endpoint": ENDPOINTS[args.tier], "res": args.resolution,
+                          "cost": PRICE[args.tier][args.resolution],
                           "loop": not args.no_loop}, indent=1))
         return
     rdir = OUT / args.name

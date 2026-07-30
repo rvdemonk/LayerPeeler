@@ -44,7 +44,7 @@ def run(rdir):
     rdir = Path(rdir)
     frames = sorted((rdir / "rgba").glob("frame_*.png"))
     T = len(frames)
-    labs, sats, areas, vel = [], [], [], [0.0]
+    labs, sats, areas, vel, fvel = [], [], [], [0.0], [0.0]
     prev_gray, prev_a = None, None
     for fp in frames:
         im = cv2.imread(str(fp), cv2.IMREAD_UNCHANGED)
@@ -58,13 +58,29 @@ def run(rdir):
                 prev_gray, g, None, 0.5, 3, 15, 3, 5, 1.2, 0)
             mag = np.linalg.norm(flow, axis=-1)
             vel.append(float(mag[a | prev_a].mean()))
+            # face region ~ upper-central band of the character bbox
+            # (mascot heuristic; born from wave-1 raccoon-jig: dancing
+            # body, dead face — Lewis caught it, this gate now does)
+            ys, xs = np.nonzero(a)
+            x0, x1 = xs.min(), xs.max()
+            y0, y1 = ys.min(), ys.max()
+            w, h = x1 - x0, y1 - y0
+            fb = mag[y0 + int(.12 * h):y0 + int(.50 * h),
+                     x0 + int(.25 * w):x0 + int(.75 * w)]
+            fvel.append(float(fb.mean()) if fb.size else 0.0)
         prev_gray, prev_a = g, a
     labs = np.array(labs)
     sats = np.array(sats)
     vel = np.array(vel)
+    fvel = np.array(fvel)
     dL = labs[:, 0] - labs[0, 0]
     dSat = sats - sats[0]
     jerk = float(np.sqrt(np.mean(np.diff(vel) ** 2)))
+    # face liveness DURING action: face flow / body flow on the frames
+    # where the body is actually moving (above-median velocity)
+    active = vel > max(np.median(vel), 0.15)
+    face_ratio = float(fvel[active].mean() / max(vel[active].mean(), 1e-6)) \
+        if active.any() else 1.0
 
     f0 = cv2.imread(str(frames[0]), cv2.IMREAD_UNCHANGED)
     fN = cv2.imread(str(frames[-1]), cv2.IMREAD_UNCHANGED)
@@ -79,6 +95,8 @@ def run(rdir):
         "color_dL_cliff": float(np.abs(np.diff(dL)).max()),
         "velocity_p95": float(np.percentile(vel, 95)),
         "jerk_rms": jerk,
+        "face_vel_p95": float(np.percentile(fvel, 95)),
+        "face_body_ratio": face_ratio,
         "silhouette_rel_range": [float(min(areas) / np.median(areas)),
                                  float(max(areas) / np.median(areas))],
     }
@@ -113,7 +131,8 @@ def run(rdir):
     print(f"{rdir.name}: loop {gates['loop_ssim']:.3f}/"
           f"{gates['loop_alpha_iou']:.3f} | dL max {gates['color_dL_max']:.1f}"
           f" cliff {gates['color_dL_cliff']:.1f} | dSat {gates['color_dSat_max']:.1f}"
-          f" | vel p95 {gates['velocity_p95']:.2f} jerk {jerk:.2f}")
+          f" | vel p95 {gates['velocity_p95']:.2f} jerk {jerk:.2f}"
+          f" | face/body {gates['face_body_ratio']:.2f}")
     return gates
 
 
