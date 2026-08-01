@@ -486,8 +486,28 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404, "gone")
 
 
+def set_root(path):
+    """Point the sandbox at a different tree of run dirs.
+
+    The consolidated pipeline writes to out/pipeline/ rather than
+    out/spike2/, in the same per-run layout (rgba/, ladder/, gates.json,
+    the GIF and sheet) and with a ladder_report.json in the same shape.
+    Rather than fork the player, the root is swappable: one appraisal
+    instrument, two trees, no second copy to drift.
+    """
+    global SPIKE2
+    SPIKE2 = Path(path).resolve()
+    MOUNTS["/media/spike2/"] = SPIKE2
+    _report_cache.clear()
+
+
 def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
+    argv = sys.argv[1:]
+    if "--root" in argv:
+        i = argv.index("--root")
+        set_root(argv[i + 1])
+        del argv[i:i + 2]
+    port = int(argv[0]) if argv else DEFAULT_PORT
     if not SPIKE2.is_dir():
         sys.exit("no run dir: %s" % SPIKE2)
     man = build_manifest()
