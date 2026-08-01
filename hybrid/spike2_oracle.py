@@ -40,6 +40,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image
 
 ENDPOINTS = {
     "turbo": "fal-ai/wan/v2.2-a14b/image-to-video/turbo",   # per-VIDEO price
@@ -151,18 +152,30 @@ def matte(frames, mdir):
                 rgba[..., :3] = cv2.cvtColor(lab.astype(np.uint8),
                                              cv2.COLOR_LAB2BGR)
         op = mdir / fp.name
-        cv2.imwrite(str(op), rgba)
+        # PIL with optimize=True rather than cv2.imwrite: identical pixels
+        # (lossless either way), but cv2 encodes PNG at compression level 1
+        # and PIL picks better filters, which measured 30-34% smaller across
+        # the spike2 corpus. Free bytes off every downstream pack.
+        Image.fromarray(cv2.cvtColor(rgba, cv2.COLOR_BGRA2RGBA)).save(
+            op, optimize=True)
         outs.append(op)
     return outs
 
 
-def pack_lottie(rgba_frames, size, fps, path):
-    """Frame-seq Lottie: one embedded PNG asset + one image layer per frame."""
+def pack_lottie(rgba_frames, size, fps, path, mime="png"):
+    """Frame-seq Lottie: one embedded image asset + one image layer per frame.
+
+    `mime` is the embedded codec (png | webp). Only the data-URI prefix
+    changes — the asset/layer structure is identical, because the player
+    hands the URI to an <img> and never inspects the bytes. The ladder
+    uses this to trade PNG's palette posterization for WebP's continuous
+    tone at comparable size.
+    """
     assets, layers = [], []
     for i, fp in enumerate(rgba_frames):
         b64 = base64.b64encode(fp.read_bytes()).decode()
         assets.append({"id": f"f{i}", "w": size, "h": size,
-                       "u": "", "p": f"data:image/png;base64,{b64}", "e": 1})
+                       "u": "", "p": f"data:image/{mime};base64,{b64}", "e": 1})
         layers.append({"ddd": 0, "ind": i + 1, "ty": 2, "nm": f"f{i}",
                        "refId": f"f{i}", "ip": i, "op": i + 1, "st": 0,
                        "ks": {"o": {"a": 0, "k": 100},

@@ -1,0 +1,36 @@
+name: LottieSandbox
+options:
+  bundleIdPrefix: com.layerpeeler
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  Lottie:
+    url: https://github.com/airbnb/lottie-ios.git
+    exactVersion: 4.6.1
+
+targets:
+  LottieSandbox:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources/lotties
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: Lottie
+    info:
+      path: Sources/Info.plist
+      properties:
+        UILaunchScreen: {}
+        CFBundleDisplayName: LottieSandbox
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.layerpeeler.lottiesandbox
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: NO

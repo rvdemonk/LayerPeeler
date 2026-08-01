@@ -42,16 +42,44 @@ SPIKE2 = LAYERPEELER / "out" / "spike2"
 MASCOTS = RESEARCH / "corpus" / "mascots"
 LEDGER = RESEARCH / "docs" / "workorders" / "hybrid-oracle-spikes" / "ledger.md"
 
+VENDOR = SANDBOX / "vendor"
+
 # URL prefix -> absolute root. Everything else 404s.
+# lottie-web is vendored, never a CDN: the sandbox has to work offline and
+# an appraisal instrument that silently changes version under you is worse
+# than no instrument.
 MOUNTS = {
     "/media/spike2/": SPIKE2,
     "/media/mascots/": MASCOTS,
+    "/vendor/": VENDOR,
 }
 
 # 8646, not the more obvious 8642: a long-lived `python -m http.server 8642`
 # of Lewis's already owns that port, and a preview that collides on launch
 # every time is a preview he stops launching.
 DEFAULT_PORT = 8646
+
+# Display order for the player's variant dropdown: heaviest first, so the
+# list reads as a descent. Mirrors RUNGS in hybrid/spike2_repack.py; a rung
+# missing from here still shows, just last.
+LADDER_ORDER = ["raw",
+                "512", "512webp", "512webp-q65", "512webp-q50",
+                "512webp-24", "512webp-q65-24", "512webp-q50-24",
+                "448webp",
+                "384", "384webp",
+                "256", "256webp",
+                # rejected, ordered last — reachable, never leading
+                "512q", "384q", "256q", "512pq", "256pq",
+                "512q-half", "384q-half", "256q-half",
+                "512webp-half", "256webp-half"]
+
+# Ruled out by Lewis's eye, not by measurement. Mirrors REJECTED in
+# hybrid/spike2_repack.py. The files stay and stay playable — a rejected
+# rung is the comparison you need when judging the one that replaced it —
+# but they are hidden until "show rejected" is ticked.
+REJECTED_RUNGS = {"512q", "384q", "256q", "512q-half", "384q-half",
+                  "256q-half", "512pq", "256pq",
+                  "512webp-half", "256webp-half"}
 
 # Ledger header labels -> manifest keys. Kept explicit so a renamed or
 # reordered ledger column degrades to a missing field rather than
@@ -120,6 +148,91 @@ def read_json(path):
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+_head_cache = {}
+
+
+def lottie_head(path):
+    """Read fr / op / w out of a Lottie without parsing it.
+
+    pack_lottie writes the scalar keys before the assets array, so the
+    first few hundred bytes carry everything the player UI needs. This
+    matters: the raw packs are ~30MB each and the manifest is rebuilt on
+    every 4s poll — json.load on 31 of those would make the sandbox
+    unusable to save one regex.
+    """
+    st = path.stat()
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    hit = _head_cache.get(str(path))
+    if hit and hit[0] == key:
+        return hit[1]
+    with path.open("rb") as fh:
+        head = fh.read(512).decode("utf-8", "replace")
+
+    def field(name):
+        m = re.search(r'"%s"\s*:\s*(-?\d+(?:\.\d+)?)' % name, head)
+        return float(m.group(1)) if m else None
+
+    rec = {"fr": field("fr"), "frames": field("op"), "w": field("w"),
+           "bytes": st.st_size}
+    _head_cache[str(path)] = (key, rec)
+    return rec
+
+
+def ladder_of(rdir, name, base):
+    """Playable variants for one run: the raw pack plus every ladder rung.
+
+    Disk is the source of truth (a rung exists iff its JSON is there);
+    ladder_report.json only contributes the gzip/.lottie numbers, which
+    cannot be read off the filesystem. The player loads plain JSON — the
+    .lottie zips are for size measurement and shipping, not playback.
+    """
+    rep = _ladder_report().get(name, {})
+    sizes = rep.get("ladder", {})
+    out = []
+    raw = rdir / ("%s.json" % name)
+    if raw.exists():
+        rec = dict(lottie_head(raw), rung="raw", url=base + raw.name)
+        rec["gz_bytes"] = (rep.get("raw") or {}).get("gz")
+        out.append(rec)
+    for jp in sorted((rdir / "ladder").glob("%s.*.json" % name)):
+        rung = jp.name[len(name) + 1:-len(".json")]
+        rec = dict(lottie_head(jp), rung=rung,
+                   url=base + "ladder/" + jp.name)
+        s = sizes.get(rung, {})
+        rec["gz_bytes"] = s.get("gz")
+        rec["lottie_bytes"] = s.get("lottie")
+        # Codec and posterization score ride along so the player can name
+        # what it is showing — a rung that Lewis rejected by eye should
+        # say so on the card, not only in a report he has to go find.
+        rec["codec"] = s.get("codec")
+        rec["score"] = s.get("score")
+        rec["quality"] = s.get("quality")
+        rec["keep"] = s.get("keep")
+        rec["rejected"] = rung in REJECTED_RUNGS
+        if (jp.with_suffix(".lottie")).exists():
+            rec["dotlottie_url"] = base + "ladder/" + jp.stem + ".lottie"
+        out.append(rec)
+    # Ladder order, not glob order: the dropdown is a ladder, and "256"
+    # sorting above "512" would make it read as an arbitrary list.
+    rank = {r: i for i, r in enumerate(LADDER_ORDER)}
+    out.sort(key=lambda v: rank.get(v["rung"], len(LADDER_ORDER)))
+    return out
+
+
+_report_cache = {}
+
+
+def _ladder_report():
+    p = SPIKE2 / "ladder_report.json"
+    if not p.exists():
+        return {}
+    key = p.stat().st_mtime_ns
+    if _report_cache.get("key") != key:
+        _report_cache["key"] = key
+        _report_cache["val"] = (read_json(p) or {}).get("runs", {})
+    return _report_cache["val"]
 
 
 def mascot_of(run_dir):
@@ -199,6 +312,7 @@ def describe_run(entry, ledger):
         "gates_png": opt("gates.png"),
         "mp4": opt("oracle.mp4"),
         "lottie": opt(name + ".json"),
+        "variants": ladder_of(rdir, name, base),
         "mtime": int((rdir / "gates.json").stat().st_mtime)
         if (rdir / "gates.json").exists()
         else int(rdir.stat().st_mtime),
@@ -262,7 +376,9 @@ def build_manifest():
 
     # Signature lets the page skip re-render when nothing changed, so
     # looping GIFs are not restarted every poll.
-    sig = [(r["dir"], r["mtime"]) for w in waves for r in w["runs"]]
+    sig = [(r["dir"], r["mtime"],
+            tuple((v["rung"], v["bytes"]) for v in r["variants"]))
+           for w in waves for r in w["runs"]]
     return {
         "waves": waves,
         "signature": str(hash((tuple(sig), LEDGER.stat().st_mtime if LEDGER.exists() else 0))),

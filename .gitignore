@@ -159,3 +159,9 @@ PhotoDoodle_Pretrain
 # heavy run artifacts + local venv (repo convention: code+plans versioned, outputs not)
 out/
 .venv-hybrid/
+
+# ios-sandbox: build products, capture artifacts, and bundled copies of
+# out/ packs (all regenerable — README has the recreate commands)
+ios-sandbox/build/
+ios-sandbox/artifacts/
+ios-sandbox/Resources/lotties/

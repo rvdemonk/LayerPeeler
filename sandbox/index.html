@@ -19,6 +19,9 @@
   --warn: #c2a96b;
   --bad: #bc7f7f;
   --h: 232px;
+  /* Artifact pane edge in CSS px — driven by the display-scale toggle so
+     a 256px rung can be judged at the size it will actually ship at. */
+  --stage: 512px;
 }
 * { box-sizing: border-box; }
 body {
@@ -126,6 +129,56 @@ a:hover { text-decoration: underline; }
 .links { display: flex; gap: 10px; font-size: 11px; margin-top: auto; padding-top: 2px; }
 .missing { color: var(--dimmer); font-size: 11px; }
 
+/* --- view switch (appraisal | lottie player) --- */
+#viewnav { display: flex; gap: 4px; margin: 0 12px 14px; }
+#viewnav button {
+  flex: 1; background: none; border: 1px solid var(--line); border-radius: 3px;
+  color: var(--dim); font: inherit; font-size: 11px; padding: 4px 6px; cursor: pointer;
+}
+#viewnav button.on { color: var(--ink); border-color: var(--accent); background: #00000030; }
+
+/* --- lottie player view --- */
+#lottie .bar {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  padding: 8px 10px; margin-bottom: 10px;
+}
+#lottie select, #lottie button {
+  background: #1c1e20; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 3px; font: inherit; font-size: 11.5px; padding: 3px 6px; cursor: pointer;
+}
+#lottie label { display: flex; gap: 5px; align-items: center; color: var(--dim); cursor: pointer; }
+#lstat, #ldpr { color: var(--dimmer); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+#ldpr { border-left: 1px solid var(--line); padding-left: 10px; }
+#lstat b { color: var(--ink); font-weight: 500; }
+#lstat b.bad { color: var(--bad); font-weight: 600; }
+#lscrub { width: 100%; margin: 0 0 12px; accent-color: var(--accent); }
+.lpanes { display: flex; gap: 14px; flex-wrap: wrap; }
+.lpanes figure { margin: 0; }
+.lpanes figcaption {
+  font-size: 10px; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--dimmer); margin-top: 4px; text-align: center;
+}
+/* Both panes sit on the same checkerboard at the same pixel size. The GIF
+   has its checkerboard baked in by eyeball() — 16px cells of #c8/#f0 on a
+   512px frame, shown at 384px, so 12px cells — and these values reproduce
+   it exactly under the transparent Lottie. A different backdrop on the two
+   panes reads as a fidelity difference when it is only a backdrop. */
+.stage {
+  width: var(--stage); height: var(--stage); border-radius: 3px; overflow: hidden;
+  background-color: #f0f0f0;
+  background-image:
+    linear-gradient(45deg, #c8c8c8 25%, transparent 25%, transparent 75%, #c8c8c8 75%),
+    linear-gradient(45deg, #c8c8c8 25%, transparent 25%, transparent 75%, #c8c8c8 75%);
+  /* The GIF's checkerboard is baked at 16px cells on a 512px frame, so it
+     scales WITH the pane; a fixed CSS cell size would drift out of step
+     the moment the display-scale toggle moves. cell = stage/32. */
+  background-size: calc(var(--stage) / 16) calc(var(--stage) / 16);
+  background-position: 0 0, calc(var(--stage) / 32) calc(var(--stage) / 32);
+}
+.stage img, .stage canvas, .stage svg { width: 100%; height: 100%; display: block; }
+#lmsg { color: var(--warn); font-size: 11.5px; margin-top: 8px; min-height: 1.4em; }
+
 /* --- lightbox --- */
 #box {
   position: fixed; inset: 0; background: #14151799; backdrop-filter: blur(3px);
@@ -141,6 +194,10 @@ a:hover { text-decoration: underline; }
 
 <div id="shell">
   <nav id="rail">
+    <div id="viewnav">
+      <button data-view="appraisal" class="on">Appraisal</button>
+      <button data-view="lottie">Lottie</button>
+    </div>
     <h1>Waves</h1>
     <div id="wavelist"></div>
     <div id="railfoot">
@@ -149,11 +206,48 @@ a:hover { text-decoration: underline; }
     </div>
   </nav>
   <main id="main">
-    <div id="head"></div>
-    <div id="note"></div>
-    <div id="runs"></div>
+    <section id="appraisal">
+      <div id="head"></div>
+      <div id="note"></div>
+      <div id="runs"></div>
+    </section>
+    <section id="lottie" hidden>
+      <div class="bar">
+        <select id="lrun" title="run"></select>
+        <select id="lvar" title="size-ladder variant"></select>
+        <button id="lplay">pause</button>
+        <label><input type="checkbox" id="lloop" checked> loop</label>
+        <label title="Render both panes at real product size. 512 is hero
+scale; 128 is a chat-sticker. A 256px rung judged upscaled to 512 looks
+soft for a reason that has nothing to do with the codec.">display
+          <select id="lscale">
+            <option value="512">512 px</option>
+            <option value="256">256 px</option>
+            <option value="128">128 px</option>
+          </select>
+        </label>
+        <label title="Rungs Lewis ruled out (posterizing codecs, 16fps).
+Kept on disk and playable for comparison."><input type="checkbox"
+          id="lrejected"> show rejected</label>
+        <span id="ldpr"></span>
+        <span id="lstat"></span>
+      </div>
+      <input type="range" id="lscrub" min="0" max="0" value="0" step="1">
+      <div class="lpanes">
+        <figure>
+          <div class="stage"><img id="lgif" alt="reference GIF"></div>
+          <figcaption>GIF — reference</figcaption>
+        </figure>
+        <figure>
+          <div class="stage" id="lstage"></div>
+          <figcaption>lottie-web — <span id="lvarname">—</span></figcaption>
+        </figure>
+      </div>
+      <div id="lmsg"></div>
+    </section>
   </main>
 </div>
+<script src="/vendor/lottie.min.js"></script>
 <div id="box"><img alt=""></div>
 <div id="stamp"></div>
 
@@ -360,9 +454,207 @@ function render() {
     });
     host.appendChild(sec);
   });
+  // A poll that adds a run must surface it in the player too, but
+  // syncRuns() keeps the current selection, so the clip under appraisal
+  // is never reloaded out from under the viewer.
+  if (view === "lottie") syncRuns();
 }
 
 $("#onlyawait").onchange = render;
+
+// ---------------------------------------------------------------------------
+// Lottie player view. The point is a side-by-side: the GIF (which every
+// verdict so far was passed on) beside lottie-web playing the actual
+// shippable artifact, at the same pixel size on the same checkerboard, so
+// a fidelity loss from a ladder rung shows up as a difference between two
+// things on screen rather than as a number in a table.
+//
+// One player, one run at a time — deliberately. A raw pack is ~30MB of
+// base64 PNG; mounting all 31 at once would wedge the tab. For the same
+// reason the default rung is the best SHIPPABLE one, not `raw`: `raw` is
+// reachable, but only if you ask for it by name and can see its size.
+// ---------------------------------------------------------------------------
+let view = "appraisal", anim = null, loadToken = 0, scrubbing = false;
+// Best shippable rung first. webp leads because it is the only codec here
+// that cannot posterize by construction — octree's 512q held this slot
+// until Lewis called it "like an old GIF" on the strawberry.
+const PREFERRED_RUNGS = ["512webp", "256webp", "512pq", "512q", "384q",
+                         "256q", "256q-half", "raw"];
+
+function fmtBytes(b) {
+  if (b == null) return "?";
+  return b < 1024 * 1000 ? (b / 1024).toFixed(0) + " KB"
+                         : (b / 1048576).toFixed(1) + " MB";
+}
+function allRuns() {
+  return manifest ? manifest.waves.flatMap(w => w.runs.map(r => [w, r])) : [];
+}
+function currentRun() {
+  const dir = $("#lrun").value;
+  const hit = allRuns().find(([, r]) => r.dir === dir);
+  return hit ? hit[1] : null;
+}
+
+document.querySelectorAll("#viewnav button").forEach(b => {
+  b.onclick = () => {
+    view = b.dataset.view;
+    document.querySelectorAll("#viewnav button")
+      .forEach(x => x.classList.toggle("on", x === b));
+    $("#appraisal").hidden = view !== "appraisal";
+    $("#lottie").hidden = view !== "lottie";
+    if (view === "lottie") syncRuns();
+  };
+});
+
+// Rebuilt on every manifest change, but the current selection survives —
+// a poll must not yank the clip out from under an appraisal in progress.
+function syncRuns() {
+  const sel = $("#lrun"), keep = sel.value;
+  sel.textContent = "";
+  manifest && manifest.waves.forEach(w => {
+    const g = el("optgroup");
+    g.label = w.title;
+    w.runs.forEach(r => {
+      const o = el("option", null, r.dir + "  (" +
+        (r.variants || []).length + " variants)");
+      o.value = r.dir;
+      o.disabled = !(r.variants && r.variants.length);
+      g.appendChild(o);
+    });
+    if (g.children.length) sel.appendChild(g);
+  });
+  const opts = [...sel.querySelectorAll("option:not([disabled])")];
+  if (!opts.length) { $("#lmsg").textContent = "no packed Lotties on disk"; return; }
+  sel.value = opts.some(o => o.value === keep) ? keep : opts[0].value;
+  if (sel.value !== keep) syncVariants();
+}
+
+function syncVariants() {
+  const run = currentRun(), sel = $("#lvar");
+  sel.textContent = "";
+  if (!run) return;
+  const showRejected = $("#lrejected").checked;
+  (run.variants || []).filter(v => showRejected || !v.rejected).forEach(v => {
+    const o = el("option", null,
+      v.rung + " · " + (v.codec || "png") + " · " + (v.w || "?") + "px · " +
+      (v.frames || "?") + "f @ " + (v.fr || "?") + "fr · " + fmtBytes(v.bytes) +
+      (v.gz_bytes ? " (gz " + fmtBytes(v.gz_bytes) + ")" : "") +
+      (v.score && v.score.flag_posterized ? "  ⚠ POSTERIZED" : "") +
+      (v.rejected ? "  [rejected]" : ""));
+    o.value = v.rung;
+    sel.appendChild(o);
+  });
+  const have = [...sel.options].map(o => o.value);
+  sel.value = PREFERRED_RUNGS.find(r => have.includes(r)) || have[0] || "";
+  $("#lgif").src = run.gif || "";
+  loadVariant();
+}
+
+function loadVariant() {
+  const run = currentRun();
+  if (!run) return;
+  const v = (run.variants || []).find(x => x.rung === $("#lvar").value);
+  if (!v) return;
+  const token = ++loadToken;
+  if (anim) { anim.destroy(); anim = null; }
+  $("#lstage").textContent = "";
+  $("#lvarname").textContent = v.rung;
+  $("#lmsg").textContent = "loading " + fmtBytes(v.bytes) + "…";
+  $("#lstat").textContent = "";
+
+  fetch(v.url, { cache: "no-store" })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
+    .then(data => {
+      if (token !== loadToken) return;   // a newer selection won the race
+      anim = lottie.loadAnimation({
+        container: $("#lstage"),
+        renderer: "canvas",              // 161 image layers: canvas, not svg
+        loop: $("#lloop").checked,
+        autoplay: true,
+        animationData: data,
+        rendererSettings: { preserveAspectRatio: "xMidYMid meet" },
+      });
+      anim.addEventListener("DOMLoaded", () => {
+        if (token !== loadToken) return;
+        $("#lscrub").max = Math.max(0, Math.round(anim.totalFrames) - 1);
+        $("#lmsg").textContent = "";
+        $("#lplay").textContent = "pause";
+        stat(v);
+      });
+      anim.addEventListener("enterFrame", () => {
+        if (token !== loadToken || scrubbing) return;
+        $("#lscrub").value = Math.round(anim.currentFrame);
+        stat(v);
+      });
+      anim.addEventListener("data_failed", () => {
+        $("#lmsg").textContent = "lottie-web could not parse " + v.url;
+      });
+    })
+    .catch(e => {
+      if (token === loadToken) $("#lmsg").textContent = "load failed: " + e.message;
+    });
+}
+
+function stat(v) {
+  const f = anim ? Math.round(anim.currentFrame) : 0;
+  const tot = anim ? Math.round(anim.totalFrames) : 0;
+  const secs = v.fr ? (tot / v.fr).toFixed(2) : "?";
+  $("#lstat").innerHTML = "";
+  const add = (label, val) => {
+    $("#lstat").appendChild(el("span", null, label + " "));
+    $("#lstat").appendChild(el("b", null, val));
+    $("#lstat").appendChild(document.createTextNode("   "));
+  };
+  add("fr", String(v.fr || "?"));
+  add("frames", String(tot));
+  add("at", String(f));
+  add("dur", secs + "s");
+  add("json", fmtBytes(v.bytes));
+  if (v.gz_bytes) add("gz", fmtBytes(v.gz_bytes));
+  if (v.lottie_bytes) add(".lottie", fmtBytes(v.lottie_bytes));
+  if (v.score) {
+    add("colors", v.score.colors_var + "/" + v.score.colors_ref);
+    add("dE", v.score.deltaE_mean.toFixed(2));
+    if (v.score.flag_posterized)
+      $("#lstat").appendChild(el("b", "bad", "POSTERIZED"));
+  }
+}
+
+$("#lrun").onchange = syncVariants;
+$("#lvar").onchange = loadVariant;
+$("#lrejected").onchange = syncVariants;
+
+// Display scale. lottie-web sizes its canvas backing store at load, so a
+// CSS-only change would leave the artifact rendering at the old
+// resolution and merely scaled — which is exactly the confound this
+// control exists to remove. anim.resize() re-derives it from the
+// container.
+function applyScale() {
+  const px = $("#lscale").value;
+  document.documentElement.style.setProperty("--stage", px + "px");
+  $("#ldpr").textContent = "@ " + px + " css px · DPR " +
+    (window.devicePixelRatio || 1) + " → " +
+    Math.round(px * (window.devicePixelRatio || 1)) + " device px";
+  if (anim) anim.resize();
+}
+$("#lscale").onchange = applyScale;
+applyScale();
+$("#lplay").onclick = () => {
+  if (!anim) return;
+  if (anim.isPaused) { anim.play(); $("#lplay").textContent = "pause"; }
+  else { anim.pause(); $("#lplay").textContent = "play"; }
+};
+$("#lloop").onchange = () => { if (anim) anim.loop = $("#lloop").checked; };
+$("#lscrub").oninput = () => {
+  if (!anim) return;
+  scrubbing = true;   // suppress enterFrame's slider write-back, not the readout
+  anim.goToAndStop(Number($("#lscrub").value), true);
+  $("#lplay").textContent = "play";
+  const run = currentRun();
+  const v = run && (run.variants || []).find(x => x.rung === $("#lvar").value);
+  if (v) stat(v);
+};
+$("#lscrub").onchange = () => { scrubbing = false; };
 
 async function poll() {
   try {
