@@ -125,9 +125,11 @@ profile, `--from-video` so generation is excluded):
 | eyeball (GIF + sheet) | 2.9 |
 | **local total** | **~16.6** |
 
-Generation itself measured 19-60s per clip across the ledger. So a clip
-is roughly **half a minute to a minute and a half wall clock, $0.05**,
-and the local half is CPU-bound and parallelisable across clips.
+Generation across the ledger's 31 rows: min 19s, median 25s, mean 36s,
+p90 59s, max 81s (turbo, 480p). So a clip is roughly **35s-100s wall
+clock at $0.05**, generation dominating and highly variable (queue
+depth, not our code), while the local half is steady and parallelisable
+across clips.
 Native-960 sources (720p generations) roughly triple the local half
 (~45s) — matting and encoding scale with source pixels, not output
 pixels.
