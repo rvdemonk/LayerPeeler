@@ -158,6 +158,7 @@ def base_prompt_for(spec, emote):
 
 PIXERY_ID = re.compile(r"\(ID:\s*(\d+)\)")
 PIXERY_COST = re.compile(r"Cost:\s*\$([0-9.]+)")
+PIXERY_PATH = re.compile(r"Generated:\s*(\S+)\s*\(ID:")
 
 
 def pixery_generate(prompt, ref, dest, ratio=None, dry_run=False, tag=None):
@@ -193,7 +194,20 @@ def pixery_generate(prompt, ref, dest, ratio=None, dry_run=False, tag=None):
     if proc.returncode != 0 or not Path(dest).exists():
         meta["error"] = "pixery exited %d" % proc.returncode
         return None, meta
-    return Path(dest), meta
+    dest = Path(dest)
+    m = PIXERY_PATH.search(out)
+    if m:
+        meta["archive_path"] = m.group(1)
+        # --copy-to is a byte copy, so the suffix we chose is a claim, not
+        # a fact. generate.data_uri() derives the MIME type from the
+        # suffix, and a JPEG announced as image/png is a request fal is
+        # entitled to reject — so the file takes the archive's extension.
+        real = Path(m.group(1)).suffix.lower()
+        if real and real != dest.suffix.lower():
+            fixed = dest.with_suffix(real)
+            dest.replace(fixed)
+            dest = fixed
+    return dest, meta
 
 
 def open_file(path, enabled):
@@ -314,7 +328,8 @@ def stage_bases(spec, emotes, pdir, args, clock, prior):
                                          tag=args.tag or spec.get("tag"))
             rec["draws"] += 1
             rec["cost_usd"] += meta.get("cost_usd", 0.0)
-            rec["attempts"].append({"draw": k, "path": str(dest), **meta})
+            rec["attempts"].append({"draw": k, "path": str(path or dest),
+                                    **meta})
             if args.dry_run:
                 rec["status"] = "dry-run"
                 break
@@ -596,8 +611,10 @@ def build_manifest(spec, emotes, bases, clips, args, clock, wall_seconds,
 def summary_table(man):
     w = max([len(e["name"]) for e in man["emotes"]] + [6])
     lines = ["", "== pack %s  (%s)" % (man["pack"], man["mode"]), "",
-             "  %-*s %-10s %6s %6s %8s %9s" % (w, "emote", "status", "base",
-                                               "clip", "gates", "gz KB"),
+             "  %-*s %-10s %6s %6s %8s %9s" % (w, "emote", "status",
+                                               "base*", "clip*", "gates",
+                                               "gz KB"),
+             "  (* draws/accepted)",
              "  " + "-" * (w + 43)]
     for e in man["emotes"]:
         run = (e["clip"].get("run") or {})
