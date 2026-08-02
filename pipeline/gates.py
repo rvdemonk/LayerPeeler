@@ -103,11 +103,25 @@ FACE_BODY_FLAG = 0.55         # dead face under body motion; corpus min 0.71
 # none of them a strawberry, star or blob. Unresolved whether Wan really
 # does drift the grey-on-grey raccoon hardest or whether that palette
 # quantises less stably.
+# SEEDED 2026-08-02 (same day, later session). Until then the palette
+# kmeans drew from OpenCV's unseeded per-process RNG, so a clip's drift
+# depended on its POSITION in the process that scored it — the numbers
+# above were never reproducible. Two checks, both against clips on disk:
+# the recorded worst-good strawberry-idle-720 0.0476 re-scores at 0.0461
+# scored alone, and the recorded worst-bad celebrate 0.0575 re-scores at
+# 0.0583 alone but reproduces 0.0575 exactly at position 2 of a 4-emote
+# pack. So the calibration sweep scored the set in ONE process in an
+# order nobody wrote down, and neither endpoint of the 0.0476-0.0575 gap
+# can be reproduced. The seed makes every future number a property of the
+# clip; it does NOT recover the sweep. Re-verify the thresholds against a
+# re-scored labelled set before trusting the ~10% margin claimed above —
+# and note 5 of the 7 known-goods are not recorded anywhere in the repo.
 IDENTITY_DRIFT_FLAG = 0.052   # median late-frame return distance
 IDENTITY_PERSIST_FLAG = 0.50  # fraction of late frames over that line
 IDENTITY_GRID = 64            # normalised crop, px
 IDENTITY_K = 6                # palette clusters taken from frames 0-2
 IDENTITY_WORK = 256           # working resolution before normalising
+IDENTITY_SEED = 0             # see the kmeans call: pins the palette draw
 DE_POSTERIZE = 2.0            # the dE half of the pair
 RATIO_POSTERIZE = 0.05        # the colour-count half
 RATIO_SOURCE_MIN = 2000       # below this the source is too flat to judge
@@ -356,6 +370,13 @@ def _design_maps(frames):
     masks = [c[..., 3] > ALPHA_SOLID for c in crops]
     anchor = np.concatenate([labs[j][masks[j]] for j in range(3)])
     crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
+    # KMEANS_PP_CENTERS seeds its centres from OpenCV's RNG, which is
+    # per-process and advances with every call that draws from it. Unseeded,
+    # a clip's drift therefore depended on how many clips had been scored
+    # before it IN THE SAME PROCESS: the same pixels scored differently as
+    # emote 1 and as emote 3 of a pack. Pinned here so the number is a
+    # property of the clip alone.
+    cv2.setRNGSeed(IDENTITY_SEED)
     _, _, cen = cv2.kmeans(anchor, IDENTITY_K, None, crit, 3,
                            cv2.KMEANS_PP_CENTERS)
 
