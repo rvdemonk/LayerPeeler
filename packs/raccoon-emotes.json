@@ -1,0 +1,37 @@
+{
+ "_readme": "Template pack spec. Copy it, change 'pack', 'mascot', 'character' and the emote list. Runbook: pipeline/README.md, section 'Packs'. Paths are relative to THIS file.",
+ "pack": "raccoon-emotes",
+ "mascot": "../../corpus/mascots/raccoon.jpg",
+ "character": "flat-vector cartoon raccoon mascot",
+ "tag": "image-to-lottie,pack",
+
+ "_emote_fields": {
+  "name": "lowercase-hyphen; becomes the run dir and the .lottie filename",
+  "base": "'original' to animate the mascot as-is, or an edit instruction ('raises both arms in the air') — the instruction is wrapped in the identity-preserving prompt that gemini-pro held on the 2026-08-01 probe",
+  "base_prompt": "optional: use this i2i prompt verbatim instead of the wrapped one",
+  "prompt": "the animation prompt. Beatsheet grammar: subject, then invariants ('keeps its exact face...'), then eye rule, then numbered beats that return to the exact resting pose, then the stage clause"
+ },
+
+ "emotes": [
+  {
+   "name": "wave",
+   "base": "original",
+   "prompt": "A flat-vector cartoon raccoon mascot performs one single clear friendly wave. Throughout, it keeps its exact face — dark eye-mask, round white eyes, small black nose — and its striped tail, crisp and on-model. Its eyes stay large and round with solid dark pupils; when it blinks, the lids sweep closed and open quickly and smoothly like soft curtains — the eyes never narrow into slits. First it raises one paw beside its head, grin widening. Then it waves twice, the paw swinging in a clear arc with a little wrist snap at each end. Finally it lowers the paw and settles back to its exact resting pose. The character stays anchored in place at the center; the flat uniform background remains completely static. Smooth 2D flat-vector cartoon style, no camera movement, seamlessly loopable animation."
+  },
+  {
+   "name": "celebrate",
+   "base": "original",
+   "prompt": "A flat-vector cartoon raccoon mascot celebrates a victory. Throughout, it keeps its exact face — dark eye-mask, round white eyes, small black nose — and its striped tail, crisp and on-model. Its eyes stay large and round with solid dark pupils; when it blinks, the lids sweep closed and open quickly and smoothly like soft curtains — the eyes never narrow into slits. First it crouches down in anticipation, fists tight, grin building. Then it leaps upward — rising quickly and falling back down with real weight — punching both arms into the air at the peak while its face bursts into open-mouthed joy. It lands with a springy squash, bounces once more, smaller, and finally straightens into a proud, beaming settle, back to its exact resting pose. The character stays anchored in place at the center; the flat uniform background remains completely static. Smooth 2D flat-vector cartoon style, no camera movement, seamlessly loopable animation."
+  },
+  {
+   "name": "sleepy",
+   "base": "original",
+   "prompt": "A flat-vector cartoon raccoon mascot gets sleepy. Throughout, it keeps its exact face — dark eye-mask, round white eyes, small black nose — crisp and on-model. Its eyes stay large and round with solid dark pupils; when it blinks, the lids sweep closed and open quickly and smoothly like soft curtains — the eyes never narrow into slits. First its eyelids grow heavy and its head begins to nod forward slowly. It catches itself with a tiny start, then yawns wide, covering the yawn politely with one paw, tail curling in. Its head dips once more, almost asleep, then it shakes awake briskly and settles back to its exact resting pose with bright reopened eyes. The character stays anchored in place at the center; the flat uniform background remains completely static. Smooth 2D flat-vector cartoon style, no camera movement, seamlessly loopable animation."
+  },
+  {
+   "name": "thumbs-up",
+   "base": "holds one paw forward in a clear thumbs-up, the other paw at its side, with a confident closed-mouth smile",
+   "prompt": "A flat-vector cartoon raccoon mascot gives an approving thumbs-up. Throughout, it keeps its exact face — dark eye-mask, round white eyes, small black nose — its striped tail and its raised thumbs-up paw, crisp and on-model. Its eyes stay large and round with solid dark pupils; when it blinks, the lids sweep closed and open quickly and smoothly like soft curtains — the eyes never narrow into slits. First it pushes the thumbs-up paw forward a little with a decisive nudge, smile widening. Then it gives one confident nod, body settling with a small springy squash. Finally it holds the pose with a single slow blink and returns to its exact resting pose. The character stays anchored in place at the center; the flat uniform background remains completely static. Smooth 2D flat-vector cartoon style, no camera movement, seamlessly loopable animation."
+  }
+ ]
+}

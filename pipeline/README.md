@@ -134,6 +134,121 @@ Native-960 sources (720p generations) roughly triple the local half
 (~45s) — matting and encoding scale with source pixels, not output
 pixels.
 
+## Packs — one mascot, N emotes, measured
+
+`pipeline.pack` is the batch driver: it runs the base stage (new poses and
+expressions via gemini-pro i2i), then the single-clip pipeline above once
+per emote, and writes `pack.json` — the manifest the business model is
+priced from.
+
+```bash
+cd LayerPeeler
+set -a; source ~/.env; set +a                    # FAL_KEY
+
+# rehearse the whole driver on clips already on disk. Spends nothing.
+# (--from-video-dir adopts <dir>/<emote>/oracle.mp4, or
+#  <dir>/<mascot>-<emote>/oracle.mp4, and skips the base stage)
+.venv-hybrid/bin/python -m pipeline.pack packs/raccoon-emotes.json \
+    --only wave,celebrate,sleepy --from-video-dir out/spike2 --accept-all
+
+# see every request and its price, spend nothing
+.venv-hybrid/bin/python -m pipeline.pack packs/raccoon-emotes.json --dry-run
+
+# the real thing (asks you to accept/reroll each base and each clip)
+.venv-hybrid/bin/python -m pipeline.pack packs/raccoon-emotes.json
+
+# appraise the pack
+python3 sandbox/serve.py --root out/packs/raccoon-emotes/clips
+```
+
+Start every new pack with `--dry-run`. It prints the exact gemini-pro
+command, the exact fal payload, and the budget floor, and buys nothing.
+
+### The spec
+
+Copy `packs/raccoon-emotes.json` and edit it. Paths in it are relative to
+the spec file. Required: `pack` (output dir name), `mascot` (the image),
+`character` (a noun phrase — it is dropped into the i2i prompt), and
+`emotes`. Per emote:
+
+| field | meaning |
+|---|---|
+| `name` | lowercase-hyphen; becomes the run dir and the `.lottie` filename |
+| `base` | `"original"` to animate the mascot as-is, or an edit instruction (`"raises both arms overhead"`), which gets wrapped in the identity-preserving prompt that held on the 2026-08-01 probe |
+| `base_prompt` | optional: use this i2i prompt verbatim instead of the wrapped one |
+| `prompt` | the animation prompt — beatsheet grammar: subject, invariants (`keeps its exact face…`), the eye rule, numbered beats that return to the exact resting pose, then the stage clause |
+
+Pack size is **not** baked in. The spec's emote list is the pack; `--n K`
+takes the first K; `--only wave,sleepy` runs named ones. The business
+model's placeholder pack is 8, which is a pricing decision, not a code
+one.
+
+### Reviewing (this is the product)
+
+Each base and each clip stops for you:
+
+```
+[base 4/8] thumbs-up   draw 1 ($0.15) via gemini-pro
+    image: out/packs/…/bases/thumbs-up.draw1.png
+    [a]ccept  [r]eroll  [s]kip emote  [q]uit pack >
+```
+
+The image (or, for clips, the GIF) opens in Preview — `--no-open` stops
+that. `r` redraws with the same prompt and counts a reject; `s` abandons
+that emote and keeps the pack going; `q` stops now and writes the
+manifest for what you have. **Rerun the same command with `--resume` to
+pick up where you quit** — accepted bases and clips are reused, not
+redrawn.
+
+A clip whose gates FAIL is rerolled automatically without asking you (up
+to 3 attempts): a known-broken clip is rerolled, not shipped. A `FLAG` is
+not a verdict — you still see it and decide. Rejected clip runs are moved
+to `out/packs/<pack>/rejects/` rather than deleted; they are the corpus
+the next gate gets calibrated on.
+
+`--accept-all` takes every base and every gate-passing clip with no
+prompts. Use it for rehearsals and unattended runs, not for a pack you
+intend to sell.
+
+### What a pack leaves on disk
+
+```
+out/packs/<pack>/
+  pack.json               the manifest (below)
+  bases/<emote>.drawK.png every i2i draw, accepted and not
+  clips/<emote>/          exactly one single-clip run dir (see above)
+  clips/ladder_report.json  so sandbox/serve.py --root clips/ works
+  rejects/<emote>.rejK/   rejected clip runs, kept
+```
+
+### Reading pack.json
+
+The four numbers `docs/business-model.md` needs are under
+`measurements`, and nothing else on disk can reconstruct them:
+
+| field | what it is |
+|---|---|
+| `r_base` | gemini-pro draws per accepted base — the i2i reroll rate |
+| `r_anim` | clip draws per accepted clip — the animation reroll rate |
+| `human_minutes` | your minutes. You are asked at the end; `--minutes 45` states it up front. `human_minutes_at_prompts` is the clock actually run while you were deciding — a floor, not the whole of it |
+| `machine_wall_clock_seconds` | machine time only; the seconds you spent at prompts are subtracted, so this is the SLA number, not a stopwatch on the session |
+
+Also there: `machine_cost_usd` (real prices, gemini-pro's own reported
+cost when it reports one), `generation_seconds` vs `local_seconds` summed
+over **every** attempt including rerolls, and per-emote gate verdicts and
+flags. `r_base`/`r_anim` are `null`, never 1.0, when nothing was
+accepted — an undefined reroll rate must not read as a perfect one.
+
+### When it stops
+
+Every failure message names the file to edit and the flag to rerun with.
+Two worth knowing in advance:
+
+- *"gave up after 6 draws"* — the edit instruction is the suspect, not
+  the model. Rewrite that emote's `base` and rerun with `--resume`.
+- *"3 attempts all failed their gates"* — the animation prompt is the
+  suspect. Soften or shorten the motion and rerun with `--resume`.
+
 ## Superseded
 
 This path supersedes, for shipping purposes:
