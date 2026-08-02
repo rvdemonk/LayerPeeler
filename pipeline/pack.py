@@ -43,6 +43,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent import futures
 from pathlib import Path
 
 from . import encode as enc
@@ -372,138 +373,236 @@ def stage_bases(spec, emotes, pdir, args, clock, prior):
     return records, False
 
 
-def stage_clips(spec, emotes, pdir, args, clock, bases, prior):
+def resolve_from_video(spec, args, name):
+    """The rehearsal clip for one emote, or die() naming what was tried.
+
+    Called for EVERY emote before any clip work starts, so a missing
+    oracle.mp4 aborts the pack up front — under --jobs the same die() from
+    inside a worker would surface after other emotes had already run.
+    """
+    vdir = Path(args.from_video_dir)
+    stem = spec["_mascot_path"].stem
+    cands = [vdir / name / "oracle.mp4",
+             vdir / ("%s-%s" % (stem, name)) / "oracle.mp4"]
+    found = next((c for c in cands if c.exists()), None)
+    if found is None:
+        die("--from-video-dir %s has no clip for emote %r.\n  Tried "
+            "%s.\n  Rehearsal mode adopts <dir>/<emote>/oracle.mp4 "
+            "(or <dir>/<mascot>-<emote>/oracle.mp4); run with --only "
+            "on the emotes you have clips for."
+            % (vdir, name, " and ".join(str(c) for c in cands)))
+    return found
+
+
+# A crash-looping clip must not be able to bloat pack.json: only the tail
+# of a failed child's output is kept, which is where the traceback is.
+STDERR_TAIL_MAX = 2048
+
+
+def invoke_clip(argv, parallel):
+    """Run pipeline.run once. Returns (rc, err, captured_stdout).
+
+    Serial keeps the in-process call the driver has always made, so the
+    default path is untouched. Concurrency needs a process per clip:
+    pipeline.run reports failure by SystemExit, which cannot be caught
+    per-thread, and its module state was never written to be shared.
+    """
+    if not parallel:
+        try:
+            return pipeline_run.main(argv), None, ""
+        except SystemExit as ex:                 # gates FAIL, or a hard stop
+            return 1, str(ex), ""
+    proc = subprocess.run([sys.executable, "-m", "pipeline.run", *argv],
+                          cwd=str(ROOT), capture_output=True, text=True)
+    err = None
+    if proc.returncode != 0:
+        err = ((proc.stderr or proc.stdout or "").strip()[-STDERR_TAIL_MAX:]
+               or "pipeline.run exited %d" % proc.returncode)
+    return proc.returncode, err, proc.stdout or ""
+
+
+def clip_one(spec, e, i, total, pdir, args, clock, bases, from_video, prior,
+             emit, parallel):
+    """Everything the clip stage does for ONE emote, rerolls included.
+
+    Returns (rec, quit_). `emit` takes the operator-facing lines: serial
+    passes log() and they stream as they happen; parallel buffers them and
+    prints one block per emote, because interleaved attempt lines from
+    four clips at once are unreadable.
+    """
+    clips_dir = pdir / "clips"
+    name = e["name"]
+    base = bases.get(name, {})
+    if prior.get(name, {}).get("clip", {}).get("status") == "accepted":
+        rec = prior[name]["clip"]
+        if Path(rec.get("run_dir", "")).exists():
+            emit("[clip %d/%d] %-16s resumed (accepted earlier)"
+                 % (i, total, name))
+            return rec, False
+    if not args.from_video_dir and (base.get("status") != "accepted"
+                                    and not args.dry_run):
+        emit("[clip %d/%d] %-16s SKIPPED (no accepted base)"
+             % (i, total, name))
+        return {"status": "no-base", "draws": 0, "rejected": 0,
+                "reason": "base stage produced no accepted image"}, False
+
+    rec = {"status": "pending", "draws": 0, "rejected": 0,
+           "cost_usd": 0.0, "attempts": []}
+    while rec["draws"] < MAX_CLIP_ATTEMPTS:
+        k = rec["draws"] + 1
+        rdir = clips_dir / name
+        if rdir.exists() and rec["draws"]:
+            # Rejects are kept (they are the corpus future gates get
+            # calibrated on) but moved OUT of clips/, because the
+            # sandbox lists every directory under its root and a
+            # reject with nothing to play is noise in an appraisal.
+            rej = pdir / "rejects" / ("%s.rej%d" % (name, k - 1))
+            rej.parent.mkdir(parents=True, exist_ok=True)
+            shutil.rmtree(rej, ignore_errors=True)
+            shutil.move(str(rdir), str(rej))
+            rec["attempts"][-1]["run_dir"] = str(rej)
+        # In a dry run no base exists yet, so the mascot stands in as
+        # the conditioning image: the payload's shape is what is being
+        # inspected, and its image field is elided anyway.
+        image = base.get("path") or spec["_mascot_path"]
+        argv = clip_argv(name, image, e["prompt"], clips_dir,
+                         args, from_video)
+        emit("[clip %d/%d] %-16s attempt %d  (pipeline.run %s)"
+             % (i, total, name, k, " ".join(argv)))
+        if args.dry_run:
+            pipeline_run.main(argv + ["--dry-run"])
+            rec["status"] = "dry-run"
+            rec["draws"] += 1
+            rec["cost_usd"] += gen.cost(args.tier, args.resolution)
+            break
+        rec["draws"] += 1
+        t0 = time.time()
+        rc, err, out = invoke_clip(argv, parallel)
+        if out:
+            emit(out.rstrip("\n"))
+        secs = round(time.time() - t0, 2)
+        run = read_run_json(rdir)
+        verdict = (run.get("gates") or {}).get("verdict", "UNKNOWN")
+        tm = run.get("timings") or {}
+        attempt = {"attempt": k, "seconds": secs, "rc": rc,
+                   "verdict": verdict, "run_dir": str(rdir),
+                   "generation_seconds": tm.get("generation_seconds"),
+                   "local_seconds": tm.get("local_seconds"),
+                   "fails": (run.get("gates") or {}).get("fails", []),
+                   "flags": (run.get("gates") or {}).get("flags", []),
+                   "error": err,
+                   "cost_usd": run.get("cost_usd", 0.0)}
+        rec["attempts"].append(attempt)
+        rec["cost_usd"] += attempt["cost_usd"] or 0.0
+        if verdict == "FAIL" or rc != 0:
+            rec["rejected"] += 1
+            emit("    gates %s%s — rerolling (a broken clip is rerolled, "
+                 "not shipped)" % (verdict,
+                                   "".join("\n      - " + f
+                                           for f in attempt["fails"])))
+            if err:
+                emit("    %s" % err.strip())
+            continue
+        if args.accept_all:
+            rec.update(status="accepted", run_dir=str(rdir),
+                       verdict=verdict, run=run_summary(run))
+            break
+        emit("    gates %s — watch it: %s"
+             % (verdict, rdir / ("%s.gif" % name)))
+        open_file(rdir / ("%s.gif" % name), not args.no_open)
+        ans = clock.ask(
+            "    [a]ccept  [r]eroll  [s]kip emote  [q]uit pack > ",
+            ("a", "r", "s", "q"))
+        if ans == "a":
+            rec.update(status="accepted", run_dir=str(rdir),
+                       verdict=verdict, run=run_summary(run))
+            break
+        if ans == "r":
+            rec["rejected"] += 1
+            continue
+        if ans == "s":
+            rec["rejected"] += 1
+            rec["status"] = "skipped"
+            break
+        rec["rejected"] += 1
+        rec["status"] = "quit"
+        return rec, True
+    else:
+        rec["status"] = "exhausted"
+        emit("    %d attempts all failed their gates. This emote's "
+             "animation prompt is the suspect — soften the motion or "
+             "shorten it in %s, then rerun with --resume."
+             % (MAX_CLIP_ATTEMPTS, spec["_spec_path"]))
+    return rec, False
+
+
+def clip_jobs(args, n):
+    """How many emotes to run at once, and why it is not what was asked."""
+    if args.jobs <= 1:
+        return 1
+    if args.dry_run:
+        log("note: --dry-run prints requests in spec order; ignoring --jobs.")
+        return 1
+    return min(args.jobs, n)
+
+
+def stage_clips(spec, emotes, pdir, args, clock, bases, prior, jobs=1):
     """Run the single-clip pipeline per accepted base, with reroll.
 
     Two ways a clip is rejected, and both count as a draw for r_anim:
     the gates FAIL it (mechanical, automatic) or the operator does
     (taste). Rejected attempts are kept on disk as <name>.rej<k>/ — the
     rejects are the corpus for future gates, not garbage.
-    """
-    clips_dir = pdir / "clips"
-    records = {}
-    for i, e in enumerate(emotes, 1):
-        name = e["name"]
-        base = bases.get(name, {})
-        if prior.get(name, {}).get("clip", {}).get("status") == "accepted":
-            rec = prior[name]["clip"]
-            if Path(rec.get("run_dir", "")).exists():
-                log("[clip %d/%d] %-16s resumed (accepted earlier)"
-                    % (i, len(emotes), name))
-                records[name] = rec
-                continue
-        from_video = None
-        if args.from_video_dir:
-            vdir = Path(args.from_video_dir)
-            stem = spec["_mascot_path"].stem
-            cands = [vdir / name / "oracle.mp4",
-                     vdir / ("%s-%s" % (stem, name)) / "oracle.mp4"]
-            from_video = next((c for c in cands if c.exists()), None)
-            if from_video is None:
-                die("--from-video-dir %s has no clip for emote %r.\n  Tried "
-                    "%s.\n  Rehearsal mode adopts <dir>/<emote>/oracle.mp4 "
-                    "(or <dir>/<mascot>-<emote>/oracle.mp4); run with --only "
-                    "on the emotes you have clips for."
-                    % (vdir, name, " and ".join(str(c) for c in cands)))
-        elif base.get("status") != "accepted" and not args.dry_run:
-            records[name] = {"status": "no-base", "draws": 0, "rejected": 0,
-                             "reason": "base stage produced no accepted image"}
-            log("[clip %d/%d] %-16s SKIPPED (no accepted base)"
-                % (i, len(emotes), name))
-            continue
 
-        rec = {"status": "pending", "draws": 0, "rejected": 0,
-               "cost_usd": 0.0, "attempts": []}
-        while rec["draws"] < MAX_CLIP_ATTEMPTS:
-            k = rec["draws"] + 1
-            rdir = clips_dir / name
-            if rdir.exists() and rec["draws"]:
-                # Rejects are kept (they are the corpus future gates get
-                # calibrated on) but moved OUT of clips/, because the
-                # sandbox lists every directory under its root and a
-                # reject with nothing to play is noise in an appraisal.
-                rej = pdir / "rejects" / ("%s.rej%d" % (name, k - 1))
-                rej.parent.mkdir(parents=True, exist_ok=True)
-                shutil.rmtree(rej, ignore_errors=True)
-                shutil.move(str(rdir), str(rej))
-                rec["attempts"][-1]["run_dir"] = str(rej)
-            # In a dry run no base exists yet, so the mascot stands in as
-            # the conditioning image: the payload's shape is what is being
-            # inspected, and its image field is elided anyway.
-            image = base.get("path") or spec["_mascot_path"]
-            argv = clip_argv(name, image, e["prompt"], clips_dir,
-                             args, from_video)
-            log("[clip %d/%d] %-16s attempt %d  (pipeline.run %s)"
-                % (i, len(emotes), name, k, " ".join(argv)))
-            if args.dry_run:
-                pipeline_run.main(argv + ["--dry-run"])
-                rec["status"] = "dry-run"
-                rec["draws"] += 1
-                rec["cost_usd"] += gen.cost(args.tier, args.resolution)
-                break
-            rec["draws"] += 1
-            t0 = time.time()
+    With jobs > 1 the emotes overlap (one process each) but each emote's
+    rerolls stay strictly inline: a reroll is a decision about the clip
+    just produced, so it cannot be started before that clip exists.
+    """
+    total = len(emotes)
+    # Resolved for every emote up front — see resolve_from_video.
+    from_videos = ({e["name"]: resolve_from_video(spec, args, e["name"])
+                    for e in emotes} if args.from_video_dir else {})
+
+    if jobs == 1:
+        records = {}
+        for i, e in enumerate(emotes, 1):
+            rec, quit_ = clip_one(spec, e, i, total, pdir, args, clock, bases,
+                                  from_videos.get(e["name"]), prior, log,
+                                  False)
+            records[e["name"]] = rec
+            if quit_:
+                return records, True
+        return records, False
+
+    log("running %d emotes %d at a time; each emote's log is printed as one "
+        "block when it finishes.\n" % (total, jobs))
+    records = {}
+    with futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        pending = {}
+        for i, e in enumerate(emotes, 1):
+            buf = []
+            fut = pool.submit(clip_one, spec, e, i, total, pdir, args, clock,
+                              bases, from_videos.get(e["name"]), prior,
+                              buf.append, True)
+            pending[fut] = (e["name"], buf)
+        for fut in futures.as_completed(pending):
+            name, buf = pending[fut]
             try:
-                rc = pipeline_run.main(argv)
-                err = None
-            except SystemExit as ex:                # gates FAIL, or a hard stop
-                rc, err = 1, str(ex)
-            secs = round(time.time() - t0, 2)
-            run = read_run_json(rdir)
-            verdict = (run.get("gates") or {}).get("verdict", "UNKNOWN")
-            tm = run.get("timings") or {}
-            attempt = {"attempt": k, "seconds": secs, "rc": rc,
-                       "verdict": verdict, "run_dir": str(rdir),
-                       "generation_seconds": tm.get("generation_seconds"),
-                       "local_seconds": tm.get("local_seconds"),
-                       "fails": (run.get("gates") or {}).get("fails", []),
-                       "flags": (run.get("gates") or {}).get("flags", []),
-                       "error": err,
-                       "cost_usd": run.get("cost_usd", 0.0)}
-            rec["attempts"].append(attempt)
-            rec["cost_usd"] += attempt["cost_usd"] or 0.0
-            if verdict == "FAIL" or rc != 0:
-                rec["rejected"] += 1
-                log("    gates %s%s — rerolling (a broken clip is rerolled, "
-                    "not shipped)" % (verdict,
-                                      "".join("\n      - " + f
-                                              for f in attempt["fails"])))
-                if err:
-                    log("    %s" % err.strip())
-                continue
-            if args.accept_all:
-                rec.update(status="accepted", run_dir=str(rdir),
-                           verdict=verdict, run=run_summary(run))
-                break
-            log("    gates %s — watch it: %s"
-                % (verdict, rdir / ("%s.gif" % name)))
-            open_file(rdir / ("%s.gif" % name), not args.no_open)
-            ans = clock.ask(
-                "    [a]ccept  [r]eroll  [s]kip emote  [q]uit pack > ",
-                ("a", "r", "s", "q"))
-            if ans == "a":
-                rec.update(status="accepted", run_dir=str(rdir),
-                           verdict=verdict, run=run_summary(run))
-                break
-            if ans == "r":
-                rec["rejected"] += 1
-                continue
-            if ans == "s":
-                rec["rejected"] += 1
-                rec["status"] = "skipped"
-                break
-            rec["rejected"] += 1
-            rec["status"] = "quit"
+                rec, _ = fut.result()
+            except Exception as ex:                  # noqa: BLE001
+                # One emote crashing must not discard the other workers'
+                # finished clips, so it is recorded and the pack carries
+                # on — visibly, and still exiting non-zero because the
+                # emote was never accepted.
+                rec = {"status": "error", "draws": 0, "rejected": 0,
+                       "reason": "%s: %s" % (type(ex).__name__, ex)}
+                buf.append("    ERROR %s: %s" % (type(ex).__name__, ex))
             records[name] = rec
-            return records, True
-        else:
-            rec["status"] = "exhausted"
-            log("    %d attempts all failed their gates. This emote's "
-                "animation prompt is the suspect — soften the motion or "
-                "shorten it in %s, then rerun with --resume."
-                % (MAX_CLIP_ATTEMPTS, spec["_spec_path"]))
-        records[name] = rec
-    return records, False
+            log("\n".join(buf))
+    # Reassembled in spec order: which worker finished first must not
+    # decide the order of pack.json's emotes.
+    return {e["name"]: records[e["name"]]
+            for e in emotes if e["name"] in records}, False
 
 
 def read_run_json(rdir):
@@ -536,13 +635,19 @@ def run_summary(run):
 # ----------------------------------------------------------- manifest
 
 def build_manifest(spec, emotes, bases, clips, args, clock, wall_seconds,
-                   human_minutes):
+                   human_minutes, jobs=1):
     """pack.json — the business model's data source.
 
     r_base and r_anim are ratios of draws to accepted outputs, defined
     exactly as docs/business-model.md defines them (draws per accepted
     output). They are null, not 1.0, when nothing was accepted: an
     undefined reroll rate must not read as a perfect one.
+
+    `jobs` is recorded because it changes what one of the measurements
+    MEANS: generation_seconds and local_seconds stay per-attempt sums (the
+    serial-equivalent machine time, unchanged and still comparable across
+    packs), but above jobs=1 the wall clock is no longer their sum. A
+    reader cannot tell the two regimes apart without this field.
     """
     per = []
     for e in emotes:
@@ -584,6 +689,7 @@ def build_manifest(spec, emotes, bases, clips, args, clock, wall_seconds,
                  "rehearsal (from-video)" if args.from_video_dir else
                  "live"),
         "accept_all": args.accept_all,
+        "jobs": jobs,
         "tier": args.tier, "resolution": args.resolution,
         "profile": enc.PROFILES[args.profiles.split(",")[0]].name,
         "i2i_model": I2I_MODEL,
@@ -648,6 +754,10 @@ def summary_table(man):
         "  human minutes          %s  (%.1f measured at prompts)"
         % (fmt(m["human_minutes"]), m["human_minutes_at_prompts"]),
     ]
+    if man.get("jobs", 1) > 1:
+        lines.append("  jobs                   %d  (gen/local are summed "
+                     "per attempt; wall clock is NOT their sum)"
+                     % man["jobs"])
     return "\n".join(lines)
 
 
@@ -669,6 +779,11 @@ def main(argv=None):
     ap.add_argument("--accept-all", action="store_true",
                     help="no prompts: accept every base and every "
                          "gate-passing clip (testing, and unattended runs)")
+    ap.add_argument("--jobs", type=int, default=1, metavar="N",
+                    help="run N emotes' clips at once (default 1, serial). "
+                         "Requires --accept-all. Generation is queue wait we "
+                         "do not own, so overlapping emotes is where a pack's "
+                         "wall clock comes down.")
     ap.add_argument("--resume", action="store_true",
                     help="reuse bases/clips already accepted in this pack's "
                          "pack.json instead of redrawing them")
@@ -700,6 +815,17 @@ def main(argv=None):
     if unknown:
         ap.error("unknown profile(s) %s; have %s"
                  % (unknown, list(enc.PROFILES)))
+    if args.jobs < 1:
+        ap.error("--jobs must be at least 1")
+    if args.jobs > 1 and not args.accept_all:
+        # Refused rather than quietly serialised: an operator who thinks a
+        # pack ran in parallel and reads its wall clock off the manifest
+        # has been given a wrong number, which is worse than an error.
+        ap.error("--jobs %d needs --accept-all. The review prompt is one "
+                 "clip at a time; interleaving it across concurrent clips "
+                 "would corrupt both the answers and the measured minutes. "
+                 "Use --accept-all for an unattended pack, or --jobs 1."
+                 % args.jobs)
 
     spec = load_spec(args.spec)
     emotes = spec["emotes"]
@@ -754,9 +880,10 @@ def main(argv=None):
     t0 = time.time()
     bases, quit_ = stage_bases(spec, emotes, pdir, args, clock, prior)
     clips = {}
+    jobs = clip_jobs(args, len(emotes))
     if not quit_:
         clips, quit_ = stage_clips(spec, emotes, pdir, args, clock, bases,
-                                   prior)
+                                   prior, jobs)
     wall = time.time() - t0 - clock.seconds     # machine time, not ours
 
     human_minutes = args.minutes
@@ -770,7 +897,7 @@ def main(argv=None):
             human_minutes = clock.minutes
 
     man = build_manifest(spec, emotes, bases, clips, args, clock, wall,
-                         human_minutes)
+                         human_minutes, jobs)
     manifest_path.write_text(json.dumps(man, indent=1, default=float))
     log(summary_table(man))
     log("\n  manifest: %s" % manifest_path)

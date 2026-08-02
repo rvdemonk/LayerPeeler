@@ -87,8 +87,19 @@ def write_sandbox_report(record, out_root):
     Merged rather than overwritten: one run must not blank out the
     previous run's numbers, exactly as spike2_repack preserves partial
     ladder passes.
+
+    The merge is read-modify-write on a file shared by every run under the
+    same --out root, so it is locked: concurrent runs (pack --jobs, or two
+    hand-run pipelines) would otherwise each read the same `prev` and the
+    last writer would silently drop the others' entries.
     """
     path = Path(out_root) / "ladder_report.json"
+    with ledger.filelock(path):
+        _merge_sandbox_report(record, path)
+    return path
+
+
+def _merge_sandbox_report(record, path):
     prev = {}
     if path.exists():
         try:
@@ -111,7 +122,6 @@ def write_sandbox_report(record, out_root):
     }
     path.write_text(json.dumps({"generator": "pipeline.run", "runs": runs},
                                indent=1))
-    return path
 
 
 def main(argv=None):

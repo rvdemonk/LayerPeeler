@@ -159,12 +159,44 @@ set -a; source ~/.env; set +a                    # FAL_KEY
 # the real thing (asks you to accept/reroll each base and each clip)
 .venv-hybrid/bin/python -m pipeline.pack packs/raccoon-emotes.json
 
+# unattended, 4 emotes' clips at once
+.venv-hybrid/bin/python -m pipeline.pack packs/raccoon-emotes.json \
+    --accept-all --jobs 4
+
 # appraise the pack
 python3 sandbox/serve.py --root out/packs/raccoon-emotes/clips
 ```
 
 Start every new pack with `--dry-run`. It prints the exact gemini-pro
 command, the exact fal payload, and the budget floor, and buys nothing.
+
+### `--jobs N` — overlapping the clip stage
+
+The clip stage runs `N` emotes at once, one subprocess each; **the base
+stage stays serial** (it is the review stage), and each emote's rerolls
+stay inline (a reroll is a decision about the clip just produced).
+
+`--jobs N` requires `--accept-all` and errors without it. The review
+prompt is one clip at a time, and a pack that quietly serialised itself
+would still report a parallel wall clock — a wrong number is worse than
+a refusal.
+
+Measured (M3 Air, 8 cores, 4 emotes, `--from-video-dir`, so this is the
+local half only): **68.5s serial → 20.4s at `--jobs 4`, 3.4x**. On a live
+pack the win is larger and differently sourced: generation is 35-100s of
+queue wait per clip that overlaps for free.
+
+`pack.json` records `jobs`. It has to, because it changes what a
+measurement MEANS: `generation_seconds` and `local_seconds` are still
+per-attempt sums (serial-equivalent machine time, comparable across
+packs), but above `jobs=1` the wall clock is no longer their sum.
+
+Concurrency made two read-modify-writes load-bearing, both now under an
+exclusive `flock` on a `<file>.lock` sidecar: the shared
+`ladder_report.json` merge, and the ledger's row id (derived by counting
+rows). Measured unfixed at 16 concurrent writers: **9 of 16 ledger rows
+lost, ids duplicated**. The lock is in the writers, not the pack driver,
+because two hand-run `pipeline.run` invocations race identically.
 
 ### The spec
 

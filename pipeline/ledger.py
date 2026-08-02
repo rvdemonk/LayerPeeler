@@ -24,6 +24,8 @@ already on disk is not a new generation and must not inflate the ledger
 (or the cost column, which is summed for unit economics).
 """
 
+import contextlib
+import fcntl
 import time
 from pathlib import Path
 
@@ -34,6 +36,29 @@ HEADER = (
     "| id | date | input | model | res | seed | loop | cost | frames | "
     "lottie KB | gen s | gates | Claude pre-verdict | Lewis verdict |\n"
     "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+
+
+@contextlib.contextmanager
+def filelock(path):
+    """Exclusive lock on <path>.lock, for a read-modify-write of <path>.
+
+    Two writers that read a file, derive something from what they read, and
+    write it back cannot be interleaved safely — this ledger's row id is
+    derived by counting existing rows, and run.write_sandbox_report merges
+    into a shared ladder_report.json. Concurrent pipeline runs (pack --jobs,
+    or two operators running pipeline.run by hand) hit both.
+
+    It lives in this module rather than run.py only because run.py imports
+    ledger, so the other direction would be an import cycle.
+    """
+    lock = Path(str(path) + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock, "a+") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def gate_cell(gates):
@@ -65,14 +90,21 @@ def append_row(path, image, prompt, tier, resolution, seed, loop, cost,
                frames, gz_kb, gen_seconds, gates):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text(HEADER)
-    text = path.read_text()
-    rid = "r%03d" % (text.count("\n| r") + 1)
-    row = ("| %s | %s | %s: \"%s...\" | wan2.2-a14b-%s | %s | %s | %s | "
-           "$%.3f | %d | %d | %.0f | %s | — | — |\n"
-           % (rid, time.strftime("%Y-%m-%d"), Path(image).stem, prompt[:60],
-              tier, resolution, seed, loop, cost, frames, gz_kb, gen_seconds,
-              gate_cell(gates)))
-    path.write_text(text + row)
+    # The id is derived by counting rows, so count and write are one
+    # critical section: two concurrent runs would otherwise mint the same
+    # id and the second's whole-file rewrite would drop the first's row.
+    with filelock(path):
+        if not path.exists():
+            path.write_text(HEADER)
+        rid = "r%03d" % (path.read_text().count("\n| r") + 1)
+        row = ("| %s | %s | %s: \"%s...\" | wan2.2-a14b-%s | %s | %s | %s | "
+               "$%.3f | %d | %d | %.0f | %s | — | — |\n"
+               % (rid, time.strftime("%Y-%m-%d"), Path(image).stem,
+                  prompt[:60], tier, resolution, seed, loop, cost, frames,
+                  gz_kb, gen_seconds, gate_cell(gates)))
+        # Appended, not rewritten: the ledger is an append-only document,
+        # and rewriting the whole history to add one line puts every prior
+        # row at risk of a crash mid-write. Same bytes, no exposure.
+        with path.open("a") as fh:
+            fh.write(row)
     return rid
