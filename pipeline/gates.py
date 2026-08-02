@@ -6,7 +6,7 @@ the rejects. Every gate here exists because Lewis's eye caught something
 Claude's did not, and each one retires that defect class from needing his
 minutes again.
 
-Four gates, run in two places:
+Five gates, run in two places:
 
   BASIC INTEGRITY (on the matte, before anything perceptual). Cheap,
   mechanical, and first — "local SSIM 0.63" cannot distinguish a soft fit
@@ -91,12 +91,12 @@ DL_MAX_FLAG = 3.0             # colour-normed runs sit at ~1.0
 DL_CLIFF_FLAG = 2.0
 JERK_FLAG = 3.0               # fidget; the loud jigs measure 3.2-3.8
 FACE_BODY_FLAG = 0.55         # dead face under body motion; corpus min 0.71
-# Identity drift. CALIBRATION PROVENANCE, and its limits: set on n=9
-# identity-appraised clips (3 known-bad, 6 known-good) spanning 2 mascot
+# Identity drift. CALIBRATION PROVENANCE, and its limits: set on n=10
+# identity-appraised clips (3 known-bad, 7 known-good) spanning 2 mascot
 # styles, in ONE session, 2026-08-02. It separates that set completely —
 # worst bad 0.0575 (celebrate), worst good 0.0476 (strawberry-idle-720) —
 # and the line sits at the geometric middle of a 21%-wide gap, so the
-# margin is ~10% either way. Nine clips and a 10% margin is a provisional
+# margin is ~10% either way. Ten clips and a 10% margin is a provisional
 # threshold by construction; widen the labelled set before trusting it to
 # trigger a reroll. Known asymmetry: on the 22 spike2 runs that were never
 # identity-appraised it fires 7 times, every one of them a raccoon and
