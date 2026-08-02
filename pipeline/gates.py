@@ -20,6 +20,15 @@ Four gates, run in two places:
   a cliff, fidget as a high jerk. face_body_ratio came from wave-1's
   raccoon-jig: dancing body, dead face.
 
+  IDENTITY DRIFT (on the matte). Born from pack #1: Wan draws a DIFFERENT
+  character by late frames — the raccoon's eye-mask splits from one blob
+  into two, white eye-rings appear, the head rounds. Every other gate was
+  quiet (loop_ssim 0.974, colour stable, velocity clean) because none of
+  them measures identity over time. Scored as a return distance: late
+  frames are matched against a bank of early ones, so legitimate pose
+  change (which recurs around a loop) cancels and design change (which
+  does not) accumulates.
+
   POSTERIZATION PAIR (on the encoded assets). Colour-count ratio AND mean
   dE. Either alone is known-broken: pngquant crushes the palette by the
   same factor as octree (ratio 0.027 vs 0.031) at a quarter of the colour
@@ -82,6 +91,23 @@ DL_MAX_FLAG = 3.0             # colour-normed runs sit at ~1.0
 DL_CLIFF_FLAG = 2.0
 JERK_FLAG = 3.0               # fidget; the loud jigs measure 3.2-3.8
 FACE_BODY_FLAG = 0.55         # dead face under body motion; corpus min 0.71
+# Identity drift. CALIBRATION PROVENANCE, and its limits: set on n=9
+# identity-appraised clips (3 known-bad, 6 known-good) spanning 2 mascot
+# styles, in ONE session, 2026-08-02. It separates that set completely —
+# worst bad 0.0575 (celebrate), worst good 0.0476 (strawberry-idle-720) —
+# and the line sits at the geometric middle of a 21%-wide gap, so the
+# margin is ~10% either way. Nine clips and a 10% margin is a provisional
+# threshold by construction; widen the labelled set before trusting it to
+# trigger a reroll. Known asymmetry: on the 22 spike2 runs that were never
+# identity-appraised it fires 7 times, every one of them a raccoon and
+# none of them a strawberry, star or blob. Unresolved whether Wan really
+# does drift the grey-on-grey raccoon hardest or whether that palette
+# quantises less stably.
+IDENTITY_DRIFT_FLAG = 0.052   # median late-frame return distance
+IDENTITY_PERSIST_FLAG = 0.50  # fraction of late frames over that line
+IDENTITY_GRID = 64            # normalised crop, px
+IDENTITY_K = 6                # palette clusters taken from frames 0-2
+IDENTITY_WORK = 256           # working resolution before normalising
 DE_POSTERIZE = 2.0            # the dE half of the pair
 RATIO_POSTERIZE = 0.05        # the colour-count half
 RATIO_SOURCE_MIN = 2000       # below this the source is too flat to judge
@@ -260,6 +286,141 @@ def strips(frames):
         flags.append("face underacting (face/body %.2f)" % g["face_body_ratio"])
     g["flags"] = flags
     return g, {"dL": dL, "dSat": dSat, "vel": vel}
+
+
+# -------------------------------------------------------- identity drift ---
+
+_SHIFTS = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1),
+           (1, 1), (-1, -1), (1, -1), (-1, 1)]
+
+
+def _normalised_crop(rgba, m, radius):
+    """A translation- and scale-normalised square crop of the character.
+
+    Centred on the centroid of the ERODED mask and sized from sqrt(area),
+    not on the mask bounding box: a raised arm moves a bbox edge by a
+    third of the character's height, and every frame after that compares
+    against a differently-framed anchor. The eroded centroid ignores thin
+    limbs; sqrt(area) moves smoothly when they extend.
+    """
+    core = cv2.erode(m.astype(np.uint8), np.ones((9, 9), np.uint8)).astype(bool)
+    ys, xs = np.nonzero(core if core.sum() > 200 else m)
+    cy, cx = ys.mean(), xs.mean()
+    y0, x0 = int(cy - radius), int(cx - radius)
+    y1, x1 = int(cy + radius), int(cx + radius)
+    pad = max(0, -y0, -x0, y1 - rgba.shape[0], x1 - rgba.shape[1])
+    if pad:
+        rgba = cv2.copyMakeBorder(rgba, pad, pad, pad, pad,
+                                  cv2.BORDER_CONSTANT, value=(0, 0, 0, 0))
+    c = rgba[y0 + pad:y1 + pad, x0 + pad:x1 + pad]
+    if c.size == 0:
+        return None
+    return cv2.resize(c, (IDENTITY_GRID, IDENTITY_GRID),
+                      interpolation=cv2.INTER_AREA)
+
+
+def _design_maps(frames):
+    """Each frame as a label map over the character's OWN frame-0 palette.
+
+    Quantising to a fixed palette is what makes this a design comparison
+    rather than a pixel one: soft shading, codec noise and a degree of
+    lighting wander all collapse to the same label, while a region that
+    changes shape or splits in two moves pixels between labels.
+    """
+    work = []
+    for fp in frames:
+        im = _load(fp)
+        if im.shape[0] != IDENTITY_WORK:
+            im = cv2.resize(im, (IDENTITY_WORK, IDENTITY_WORK),
+                            interpolation=cv2.INTER_AREA)
+        work.append(im)
+    areas = np.array([float(_mask(im).sum()) for im in work])
+    if (areas > 0).sum() < 10:
+        return None
+    radius = 1.25 * float(np.median(np.sqrt(areas[areas > 0])))
+
+    crops, keep = [], []
+    for i, im in enumerate(work):
+        m = _mask(im)
+        if not m.any():
+            continue
+        c = _normalised_crop(im, m, radius)
+        if c is not None:
+            crops.append(c)
+            keep.append(i)
+    if len(crops) < 10:
+        return None
+
+    labs = [cv2.cvtColor(c[..., :3], cv2.COLOR_BGR2LAB).astype(np.float32)
+            for c in crops]
+    masks = [c[..., 3] > ALPHA_SOLID for c in crops]
+    anchor = np.concatenate([labs[j][masks[j]] for j in range(3)])
+    crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
+    _, _, cen = cv2.kmeans(anchor, IDENTITY_K, None, crit, 3,
+                           cv2.KMEANS_PP_CENTERS)
+
+    maps = []
+    for lab, m in zip(labs, masks):
+        d = np.linalg.norm(lab.reshape(-1, 1, 3) - cen[None], axis=2)
+        q = d.argmin(1).reshape(IDENTITY_GRID, IDENTITY_GRID).astype(np.uint8)
+        q[~m] = IDENTITY_K          # background is its own label
+        maps.append(q)
+    return np.array(maps), keep
+
+
+def identity(frames):
+    """Return distance: does the character late in the clip still match
+    the one at the start?
+
+    The hard part is that legitimate animation changes frames too. What
+    separates the two is RECURRENCE. These clips loop, so a pose struck
+    at frame 130 was struck somewhere in the opening fifth as well; a
+    design change was not. So each frame is scored against a BANK of
+    early frames and keeps its best match — pose is matched away, drift
+    is not — and the verdict is the median over the last third, which no
+    single odd frame can move.
+
+    Not a ratio, so it takes no absolute-floor partner: the denominator
+    is the fixed 64x64 grid, never small. It is still a pair, for the
+    other reason the ledger keeps insisting on pairs — one number cannot
+    tell a sustained redraw from one ugly frame. Magnitude AND the
+    fraction of late frames holding it, or no flag.
+    """
+    built = _design_maps(frames)
+    if built is None:
+        return {"note": "too few usable frames to score identity",
+                "flags": []}
+    maps, keep = built
+    T = len(maps)
+    bank = list(range(0, max(T // 5, 2), 2))
+
+    def d(a, b):
+        return min(float((a != np.roll(np.roll(b, dy, 0), dx, 1)).mean())
+                   for dy, dx in _SHIFTS)
+
+    dist = np.array([min(d(maps[t], maps[b]) for b in bank) for t in range(T)])
+    ctrl = dist[T // 5:2 * T // 5]      # early frames, same treatment
+    late = dist[2 * T // 3:]
+    drift = float(np.median(late))
+    persist = float((late > IDENTITY_DRIFT_FLAG).mean())
+
+    g = {
+        "identity_drift": drift,
+        "identity_drift_ctrl": float(np.median(ctrl)) if len(ctrl) else 0.0,
+        "identity_drift_p90": float(np.percentile(late, 90)),
+        "identity_persist": persist,
+        "identity_scored_frames": int(T),
+        "identity_worst_frame": int(keep[2 * T // 3 + int(np.argmax(late))]),
+    }
+    # ctrl is reported, never subtracted. Two of the three known-bads drift
+    # early and hold it, so their late-minus-ctrl delta is ~0 — a gate built
+    # on the delta would have passed them.
+    g["flags"] = (["identity drift %.3f over %.0f%% of late frames "
+                   "(worst f%d)" % (drift, 100 * persist,
+                                    g["identity_worst_frame"])]
+                  if drift > IDENTITY_DRIFT_FLAG
+                  and persist >= IDENTITY_PERSIST_FLAG else [])
+    return g
 
 
 def draw_strips(series, metrics, path):

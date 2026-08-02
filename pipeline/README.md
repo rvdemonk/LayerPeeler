@@ -88,6 +88,7 @@ a flag is not a verdict.
 |---|---|---|
 | basic-integrity | empty frames, silhouette collapse, character leaving frame, frozen frames, broken loop | thresholds set clear of the whole 31-run corpus |
 | colour + velocity strips | luminance drift, loop-seam colour cliff, fidget, dead face under body motion | corpus distribution |
+| identity drift | the character going off-model across the clip — a region splitting in two, new features appearing, head shape changing | 9 identity-appraised clips over 2 mascot styles, one session; ~10% margin either way. Provisional |
 | posterization PAIR | palette crush **and** colour error, worst of 8 sampled frames | matched to Lewis's octree verdict |
 | temporal shimmer PAIR | flat-region crawl the stills cannot see: ratio **and** absolute excess vs the lossless matte | responds monotonically to webp quality; fires at q10, silent at q50/q65 (both of which Lewis passed) |
 
@@ -119,11 +120,12 @@ profile, `--from-video` so generation is excluded):
 | matte | 6.3 |
 | gate_integrity | 0.5 |
 | gate_strips | 4.1 |
+| gate_identity | 0.8 |
 | encode | 1.8 |
 | gate_posterization | 0.5 |
 | gate_shimmer | 0.1 |
 | eyeball (GIF + sheet) | 2.9 |
-| **local total** | **~16.6** |
+| **local total** | **~17.4** |
 
 Generation across the ledger's 31 rows: min 19s, median 25s, mean 36s,
 p90 59s, max 81s (turbo, 480p). So a clip is roughly **35s-100s wall

@@ -196,12 +196,16 @@ def main(argv=None):
             strip_g, series = G.strips(rgba)
             G.draw_strips(series, strip_g, rdir / "gates.png")
 
-        pre = G.verdict(integ, strip_g)
+        with t.stage("gate_identity"):
+            ident = G.identity(rgba)
+
+        pre = G.verdict(integ, strip_g, ident)
         log("  integrity/strips: %s%s" % (pre["verdict"], "".join(
             "\n    - " + x for x in pre["fails"] + pre["flags"])))
         if pre["fails"] and not args.force:
             record["gates"] = {**pre, "detail": {"integrity": integ,
-                                                 "strips": strip_g}}
+                                                 "strips": strip_g,
+                                                 "identity": ident}}
             raise SystemExit("basic integrity FAILED — not encoding. "
                              "A known-broken clip must be rerolled, not "
                              "shipped as if fitted. (--force overrides)")
@@ -233,17 +237,19 @@ def main(argv=None):
         for f in ship_assets:
             Path(f).unlink(missing_ok=True)
 
-        final = G.verdict(integ, strip_g, post, shim)
+        final = G.verdict(integ, strip_g, ident, post, shim)
         # Flat scalars first: the appraisal sandbox reads specific keys off
         # the top level of gates.json, and nested detail would hide them.
         gates_out = {**{k: v for k, v in integ.items()
                         if k not in ("fails", "flags")},
                      **{k: v for k, v in strip_g.items() if k != "flags"},
+                     **{k: v for k, v in ident.items() if k != "flags"},
                      "posterization_dE": (post.get("worst_frame") or {})
                      .get("deltaE_mean"),
                      "shimmer_ratio": shim.get("ratio"),
                      **final,
                      "detail": {"integrity": integ, "strips": strip_g,
+                                "identity": ident,
                                 "posterization": post, "shimmer": shim}}
         G.write(gates_out, rdir / "gates.json")
         record["gates"] = gates_out
