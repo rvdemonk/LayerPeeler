@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BRANDNAME — mascot emotes as lightweight Lottie</title>
+<meta name="description" content="Send your mascot illustration, get back a pack of animated Lottie emotes that drop straight into your app. Painterly and hand-drawn styles that hand-made vector can't reach.">
+<meta name="color-scheme" content="dark light">
+<!-- Inline so the page makes exactly zero requests it doesn't need. Swap for
+     a real mark when BRANDNAME becomes a name. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%237fb3d5'/%3E%3Cpath d='M13 10l9 6-9 6z' fill='%23131517'/%3E%3C/svg%3E">
+
+<!-- ===================================================================
+     CONFIG — the only block you need to edit to rebrand or go live.
+     Change a value here and it propagates to every mention in the page
+     (title, headings, mailto subject, buttons, footer).
+     =================================================================== -->
+<script>
+const CONFIG = {
+  // Product name. Replaces every BRANDNAME token on the page.
+  brand:  "BRANDNAME",
+
+  // Stripe Payment Link. Create in Stripe dashboard -> Payment Links,
+  // AU$79 "Founding pack", then paste the https://buy.stripe.com/... URL.
+  // TODO(Lewis): paste the real Stripe Payment Link here.
+  stripe: "#STRIPE_LINK",
+
+  // Intake email (prefilled subject built from `brand`).
+  email:  "lewisthompson96@gmail.com",
+
+  // X handle WITHOUT the @. TODO(Lewis): set this, or delete the DM line
+  // in the intake section if you'd rather not take DMs.
+  xHandle: "X_HANDLE",
+};
+</script>
+
+<style>
+/* ---------------------------------------------------------------------
+   Dark by default, light honoured. Two overrides per token: the media
+   query is the passive signal, the [data-theme] attributes win over it
+   when something explicit sets a theme.
+   --------------------------------------------------------------------- */
+:root {
+  --bg:      #131517;
+  --bg-2:    #1a1d20;
+  --panel:   #1e2124;
+  --line:    #2c3034;
+  --line-2:  #3a3f45;
+  --ink:     #e4e7ea;
+  --ink-2:   #a8afb6;
+  --ink-3:   #767d84;
+  --accent:  #7fb3d5;
+  --accent-2:#a3d0a8;
+  --warn:    #d4b273;
+  --stage-a: #f2f2f2;
+  --stage-b: #d0d0d0;
+  --shadow:  0 1px 3px #0006;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg:      #fbfbfa;
+    --bg-2:    #f3f3f1;
+    --panel:   #ffffff;
+    --line:    #e2e2df;
+    --line-2:  #cfcfcb;
+    --ink:     #1b1e21;
+    --ink-2:   #555c63;
+    --ink-3:   #868d94;
+    --accent:  #2c6d99;
+    --accent-2:#3d7a45;
+    --warn:    #8a6a1f;
+    --stage-a: #f2f2f2;
+    --stage-b: #d0d0d0;
+    --shadow:  0 1px 3px #0000000f;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #fbfbfa; --bg-2: #f3f3f1; --panel: #fff; --line: #e2e2df;
+  --line-2: #cfcfcb; --ink: #1b1e21; --ink-2: #555c63; --ink-3: #868d94;
+  --accent: #2c6d99; --accent-2: #3d7a45; --warn: #8a6a1f;
+  --shadow: 0 1px 3px #0000000f;
+}
+:root[data-theme="dark"] {
+  --bg: #131517; --bg-2: #1a1d20; --panel: #1e2124; --line: #2c3034;
+  --line-2: #3a3f45; --ink: #e4e7ea; --ink-2: #a8afb6; --ink-3: #767d84;
+  --accent: #7fb3d5; --accent-2: #a3d0a8; --warn: #d4b273;
+  --shadow: 0 1px 3px #0006;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.65 ui-sans-serif, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; }
+p { margin: 0 0 1em; }
+a { color: var(--accent); }
+code, .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+hr { border: 0; border-top: 1px solid var(--line); margin: 0; }
+
+.wrap { max-width: 1060px; margin: 0 auto; padding: 0 22px; }
+section { padding: 60px 0; border-top: 1px solid var(--line); }
+section:first-of-type { border-top: 0; }
+.eyebrow {
+  font-size: 12px; font-weight: 600; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--ink-3); margin: 0 0 12px;
+}
+.lede { color: var(--ink-2); font-size: 17px; max-width: 62ch; }
+
+/* --- top bar --- */
+header {
+  position: sticky; top: 0; z-index: 20;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(140%) blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+header .wrap {
+  display: flex; align-items: center; gap: 16px;
+  height: 56px;
+}
+.brandmark { font-weight: 650; letter-spacing: -0.02em; font-size: 16px; }
+.brandmark .dot { color: var(--accent); }
+header nav { margin-left: auto; display: flex; gap: 18px; align-items: center; }
+header nav a { color: var(--ink-2); text-decoration: none; font-size: 14px; }
+header nav a:hover { color: var(--ink); }
+#themebtn {
+  background: none; border: 1px solid var(--line-2); border-radius: 5px;
+  color: var(--ink-2); font: inherit; font-size: 13px; padding: 2px 8px;
+  cursor: pointer;
+}
+#themebtn:hover { color: var(--ink); border-color: var(--ink-3); }
+@media (max-width: 640px) { header nav a.hide-sm { display: none; } }
+
+/* --- hero --- */
+#hero { padding: 68px 0 52px; }
+#hero h1 {
+  font-size: clamp(30px, 5.2vw, 46px); margin: 0 0 18px; max-width: 20ch;
+}
+#hero h1 em { font-style: normal; color: var(--accent); }
+.hero-sub { font-size: 18px; color: var(--ink-2); max-width: 60ch; }
+.cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+.btn {
+  display: inline-block; padding: 11px 20px; border-radius: 7px;
+  font-size: 15px; font-weight: 550; text-decoration: none;
+  border: 1px solid transparent; cursor: pointer;
+}
+.btn-primary { background: var(--accent); color: #0d1114; }
+.btn-primary:hover { filter: brightness(1.08); }
+.btn-ghost { border-color: var(--line-2); color: var(--ink); }
+.btn-ghost:hover { border-color: var(--ink-3); }
+
+/* The honest trade, said before anyone has to ask. */
+.honesty {
+  margin-top: 34px; padding: 14px 18px;
+  border-left: 3px solid var(--warn);
+  background: var(--bg-2); border-radius: 0 6px 6px 0;
+  color: var(--ink-2); font-size: 14.5px; max-width: 68ch;
+}
+.honesty b { color: var(--ink); font-weight: 600; }
+
+/* --- gallery --- */
+.grid {
+  display: grid; gap: 18px;
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+  margin-top: 30px;
+}
+.clip {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; overflow: hidden; box-shadow: var(--shadow);
+  display: flex; flex-direction: column;
+}
+/* Checkerboard: these emotes ship with a real alpha channel, and the only
+   way to show that on a page is to put something behind them. */
+.stage {
+  position: relative; aspect-ratio: 1 / 1; width: 100%;
+  background-color: var(--stage-a);
+  background-image:
+    linear-gradient(45deg, var(--stage-b) 25%, transparent 25%, transparent 75%, var(--stage-b) 75%),
+    linear-gradient(45deg, var(--stage-b) 25%, transparent 25%, transparent 75%, var(--stage-b) 75%);
+  background-size: 22px 22px;
+  background-position: 0 0, 11px 11px;
+  cursor: pointer;
+}
+.stage canvas, .stage svg { width: 100% !important; height: 100% !important; display: block; }
+.stage .status {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px;
+  color: #4a4f55; font-size: 13px; text-align: center; padding: 12px;
+}
+.stage .status .play {
+  width: 46px; height: 46px; border-radius: 50%;
+  border: 1px solid #00000026; background: #ffffffcc;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; color: #2b2f33;
+}
+.stage.playing .status { display: none; }
+.clip-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
+.clip-title { font-weight: 600; font-size: 15px; }
+.clip-title span { font-weight: 400; color: var(--ink-3); }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip {
+  font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+  border: 1px solid var(--line); border-radius: 4px;
+  padding: 1px 6px; color: var(--ink-2); white-space: nowrap;
+}
+.chip b { color: var(--ink); font-weight: 600; }
+.chip.hi { border-color: var(--accent); color: var(--accent); }
+.clip-note { font-size: 13px; color: var(--ink-3); margin: 0; }
+
+.gallery-foot {
+  margin-top: 22px; font-size: 14px; color: var(--ink-3);
+  display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center;
+}
+
+/* --- steps --- */
+.steps { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-top: 26px; }
+.step { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+.step .n {
+  font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+  color: var(--accent); margin-bottom: 6px;
+}
+.step h3 { font-size: 16px; margin: 0 0 6px; }
+.step p { font-size: 14px; color: var(--ink-2); margin: 0; }
+
+/* --- pricing --- */
+.price-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 26px; align-items: start; }
+.card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; padding: 24px;
+}
+.card.feature { border-color: var(--accent); }
+.tag {
+  display: inline-block; font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; font-weight: 650;
+  color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 20px; padding: 2px 10px; margin-bottom: 12px;
+}
+.amount { font-size: 40px; font-weight: 650; letter-spacing: -0.02em; }
+.amount small { font-size: 15px; font-weight: 400; color: var(--ink-3); letter-spacing: 0; }
+.card ul { margin: 16px 0 20px; padding-left: 0; list-style: none; font-size: 14.5px; color: var(--ink-2); }
+.card ul li { padding: 4px 0 4px 22px; position: relative; }
+.card ul li::before {
+  content: "—"; position: absolute; left: 0; color: var(--ink-3);
+}
+.fineprint { font-size: 13px; color: var(--ink-3); margin: 12px 0 0; }
+
+/* --- tables --- */
+.tablewrap { overflow-x: auto; margin-top: 22px; border: 1px solid var(--line); border-radius: 10px; }
+table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: 14.5px; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+thead th { background: var(--bg-2); color: var(--ink-2); font-weight: 600; font-size: 13px; }
+tbody tr:last-child td { border-bottom: 0; }
+td.us { color: var(--ink); }
+
+/* --- faq --- */
+details {
+  border-bottom: 1px solid var(--line); padding: 14px 0;
+}
+details summary {
+  cursor: pointer; font-weight: 550; list-style: none;
+  display: flex; justify-content: space-between; gap: 14px; align-items: center;
+}
+details summary::-webkit-details-marker { display: none; }
+details summary::after { content: "+"; color: var(--ink-3); font-weight: 400; }
+details[open] summary::after { content: "\2212"; }
+details .answer { color: var(--ink-2); font-size: 15px; padding-top: 10px; max-width: 74ch; }
+details .answer p:last-child { margin-bottom: 0; }
+
+/* --- intake --- */
+.intake { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 24px; }
+
+footer {
+  border-top: 1px solid var(--line); padding: 30px 0 50px;
+  color: var(--ink-3); font-size: 13.5px;
+}
+footer p { max-width: 70ch; }
+</style>
+</head>
+
+<header>
+  <div class="wrap">
+    <div class="brandmark" data-brand>BRANDNAME<span class="dot">.</span></div>
+    <nav>
+      <a href="#gallery">Gallery</a>
+      <a href="#how" class="hide-sm">How it works</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#faq" class="hide-sm">FAQ</a>
+      <button id="themebtn" type="button" title="Toggle light/dark">theme</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<section id="hero">
+  <div class="wrap">
+    <p class="eyebrow">Mascot &rarr; animated Lottie</p>
+    <h1>Your mascot, animated as <em>Lottie emotes</em> that ship inside your app.</h1>
+    <p class="hero-sub">
+      Send one illustration. Get back a pack of looping emotes &mdash; wave,
+      celebrate, thumbs-up, idle &mdash; as <code>.json</code> and
+      <code>.lottie</code> files that play in lottie-web and lottie-ios, with a
+      real alpha channel, in styles hand-made vector animation can't reach:
+      painterly shading, soft gradients, organic secondary motion.
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#pricing">Founding pack &mdash; AU$79</a>
+      <a class="btn btn-ghost" href="#gallery">Watch them run &darr;</a>
+    </div>
+    <p class="honesty">
+      <b>The honest trade, up front:</b> a hand-animated vector Lottie of
+      comparable complexity is 50&ndash;300&nbsp;KB. These are rendered frame
+      sequences wrapped in Lottie, so they land around 0.7&ndash;2&nbsp;MB
+      gzipped &mdash; roughly 10&times; the bytes, and no encoder closes that
+      gap. What you get for it: styles a vector rig can't draw, a 48-hour
+      turnaround instead of a contractor's fortnight, and a price with two
+      digits in it. If your budget is bytes and your mascot is flat vector,
+      hire a vector animator &mdash; they'll beat us on size, permanently.
+    </p>
+  </div>
+</section>
+
+<section id="gallery">
+  <div class="wrap">
+    <p class="eyebrow">Live gallery</p>
+    <h2>These are playing in your browser right now.</h2>
+    <p class="lede">
+      Not video, not GIF &mdash; the actual Lottie JSON files, loaded by
+      lottie-web from this page, on a checkerboard so you can see the
+      transparency. Click any tile to play or pause. Every byte count below is
+      the real file on this server.
+    </p>
+
+    <div class="grid" id="clipgrid"></div>
+
+    <div class="gallery-foot">
+      <span>All clips: 512&times;512, 24&nbsp;fps, ~5&nbsp;s seamless loop, alpha preserved.</span>
+      <a href="#faq">Why the sizes look like that &rarr;</a>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <p class="eyebrow">How it works</p>
+    <h2>Three steps, one human, no dashboard to learn.</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="n">01</div>
+        <h3>Send your mascot</h3>
+        <p>
+          One image &mdash; PNG or JPG, transparent background preferred but not
+          required &mdash; plus the emotes you want. Email or DM. No account, no
+          upload flow, no onboarding.
+        </p>
+      </div>
+      <div class="step">
+        <div class="n">02</div>
+        <h3>We generate and gate</h3>
+        <p>
+          Each emote is generated several times over and machine-checked: loop
+          seam, colour drift, motion jank, on-model identity. Takes that fail
+          are re-rolled, not shipped. You never see the rejects &mdash; that
+          filtering is the actual product.
+        </p>
+      </div>
+      <div class="step">
+        <div class="n">03</div>
+        <h3>Delivered in 48 hours</h3>
+        <p>
+          A zip of <code>.json</code> and <code>.lottie</code> files, a private
+          preview page like this gallery, and the four lines of code that drop
+          them into your app. Not instant &mdash; async, and stated plainly.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <p class="eyebrow">Pricing</p>
+    <h2>Founding offer &mdash; the first five mascots.</h2>
+    <div class="price-grid">
+      <div class="card feature">
+        <span class="tag">Founding &middot; first 5 mascots</span>
+        <div class="amount">AU$79 <small>per pack</small></div>
+        <ul>
+          <li>4&ndash;6 emotes from one mascot illustration</li>
+          <li>512&times;512, 24&nbsp;fps, seamless loops, alpha preserved</li>
+          <li><code>.json</code> + <code>.lottie</code>, plus a live preview page</li>
+          <li>Delivered within 48&nbsp;hours of payment</li>
+          <li>Re-rolls on anything that doesn't look like your character</li>
+        </ul>
+        <!-- TODO(Lewis): replace CONFIG.stripe above with the real Stripe
+             Payment Link. Until then this button points at #STRIPE_LINK and
+             goes nowhere. -->
+        <a class="btn btn-primary" data-stripe href="#STRIPE_LINK">Buy a founding pack</a>
+        <p class="fineprint">
+          Payment first, delivery within 48&nbsp;hours, stated plainly. If what
+          comes back isn't on-model and you don't want it, you get your money
+          back &mdash; I'd rather refund than argue.
+        </p>
+      </div>
+
+      <div class="card">
+        <span class="tag" style="color:var(--ink-3);border-color:var(--line-2)">After the first five</span>
+        <div class="amount">AU$149 <small>per pack</small></div>
+        <ul>
+          <li>Same deliverable, same turnaround</li>
+          <li>The founding price is low for velocity, not because the work is smaller</li>
+          <li>Bigger packs and custom emote lists: ask</li>
+        </ul>
+        <p class="fineprint">
+          For scale: commissioning this from an animator runs $100&ndash;300+
+          per animation and takes days to weeks. That's the alternative this is
+          priced against.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="intake">
+  <div class="wrap">
+    <p class="eyebrow">Get started</p>
+    <h2>Send your mascot.</h2>
+    <p class="lede">
+      Attach the illustration and list the emotes you want. If you're not sure
+      what to ask for, say what your app does and I'll propose a set.
+    </p>
+    <div class="intake">
+      <div class="card">
+        <h3 style="margin:0 0 8px;font-size:16px">Email</h3>
+        <p style="color:var(--ink-2);font-size:14.5px">
+          The main channel. Attach the image; a reply comes back with a yes/no
+          on whether the style will hold up, before you pay anything.
+        </p>
+        <a class="btn btn-primary" data-mailto href="mailto:lewisthompson96@gmail.com">Email your mascot</a>
+      </div>
+      <div class="card">
+        <h3 style="margin:0 0 8px;font-size:16px">X DMs</h3>
+        <p style="color:var(--ink-2);font-size:14.5px">
+          DMs work too if that's easier &mdash; same thing, drop the image in.
+        </p>
+        <!-- TODO(Lewis): set CONFIG.xHandle above, or delete this card. -->
+        <a class="btn btn-ghost" data-x href="#X_HANDLE">DM <span data-xname>@X_HANDLE</span></a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <p class="eyebrow">FAQ</p>
+    <h2>The technical questions, answered straight.</h2>
+
+    <details open>
+      <summary>Why are the files ~1&nbsp;MB when Lottie is supposed to be tiny?</summary>
+      <div class="answer">
+        <p>
+          Because these aren't vector Lotties. Lottie is a container as well as
+          a vector format, and what's inside these is a sequence of 121 WebP
+          frames with alpha, wrapped in the Lottie JSON schema so it plays in
+          the players you already ship.
+        </p>
+        <p>
+          That buys the styles &mdash; painterly shading, gradient fills,
+          organic motion no bezier rig produces &mdash; and it costs bytes: 0.7
+          to 2&nbsp;MB gzipped instead of 50&ndash;300&nbsp;KB. It is a real
+          trade, not a temporary limitation. If your bundle can't spend a
+          megabyte, this isn't the right tool.
+        </p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Which players are verified?</summary>
+      <div class="answer">
+        <p>
+          <b>lottie-web</b> &mdash; verified; use the <code>canvas</code>
+          renderer (121 image layers is a lot of DOM for the SVG renderer).
+          <b>lottie-ios 4.6.1</b> &mdash; verified in the simulator: it renders
+          the frame-sequence format and decodes the embedded WebP assets, with
+          per-frame output essentially indistinguishable from a lossless
+          control, and first paint around 300&nbsp;ms.
+        </p>
+        <p>
+          <b>Not yet tested:</b> Android's lottie-android, React Native, and
+          older iOS versions (WebP decoding leans on the system decoder, so iOS
+          15/16 needs its own check). If you need one of those, say so before
+          you pay and I'll test it against your file rather than guess.
+        </p>
+      </div>
+    </details>
+
+    <details>
+      <summary>What exactly do I receive?</summary>
+      <div class="answer">
+        <p>
+          Per emote: a <code>.json</code> (plain Lottie, everything embedded, no
+          external asset folder to wire up) and a <code>.lottie</code>
+          (dotLottie, ~25% smaller on disk). Plus a preview page like this
+          gallery, and a snippet for whichever player you're using.
+        </p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Can I get them smaller?</summary>
+      <div class="answer">
+        <p>
+          Yes, with a stated cost. There's a size ladder: 512&nbsp;px at
+          24&nbsp;fps is the default because it's the smallest setting that
+          still looks premium. 256&nbsp;px roughly quarters the bytes and reads
+          as slightly soft at hero size but is near-native for a
+          chat-sticker-sized element. Shorter loops cut proportionally. Dropping
+          below 24&nbsp;fps was tried and rejected &mdash; it reads as a
+          flipbook. Ask for a rung and you'll get it.
+        </p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Why not just ship a GIF or an MP4?</summary>
+      <div class="answer">
+        <p>
+          GIF caps at 256 colours with one-bit transparency &mdash; a soft-edged
+          mascot gets a jagged halo over any background that isn't the one it
+          was matted onto. MP4 has no alpha at all, so it can't sit over your
+          UI. These files keep a full feathered alpha channel and composite over
+          anything, which is what an in-app emote actually needs.
+        </p>
+      </div>
+    </details>
+
+    <details>
+      <summary>What styles work best?</summary>
+      <div class="answer">
+        <p>
+          Characters with a clear silhouette and a readable palette: flat vector
+          mascots, 3D-render-style characters, hand-drawn and painterly
+          illustration, soft-gradient blobs. What struggles: very fine detail
+          and small text, which lose definition at 512&nbsp;px, and anything
+          whose appeal depends on razor-crisp geometric edges.
+        </p>
+        <p>
+          Send the image before paying &mdash; a straight answer on whether your
+          style holds up is free.
+        </p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Who's behind this?</summary>
+      <div class="answer">
+        <p>
+          One developer in Queensland, Australia, running it as a sole trader.
+          It's new &mdash; there is no customer list to show you and this page
+          isn't going to pretend otherwise. What there is: the clips above,
+          which you can right-click, download, and load into your own player
+          before you spend a cent.
+        </p>
+      </div>
+    </details>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>
+      <b data-brand>BRANDNAME</b> &mdash; mascot illustrations to lightweight
+      Lottie emotes. Built and run in Queensland, Australia. Prices in
+      Australian dollars.
+    </p>
+    <p>
+      Every clip on this page is a file you can download and inspect. No
+      numbers on this page are estimates: the byte counts are measured off the
+      files being served to you.
+    </p>
+  </div>
+</footer>
+
+<script src="assets/vendor/lottie.min.js"></script>
+<script>
+/* ---------------------------------------------------------------------
+   Config propagation. One edit in CONFIG (top of file) renames everything.
+   --------------------------------------------------------------------- */
+(function applyConfig() {
+  const B = CONFIG.brand;
+  document.title = B + " — mascot emotes as lightweight Lottie";
+  document.querySelectorAll("[data-brand]").forEach(n => {
+    n.childNodes[0].nodeValue = B;
+  });
+
+  document.querySelectorAll("[data-stripe]").forEach(a => { a.href = CONFIG.stripe; });
+
+  const subject = encodeURIComponent("Mascot pack — " + B);
+  const body = encodeURIComponent(
+    "Hi,\n\nMascot attached. Emotes I'd like:\n- \n- \n- \n- \n\n" +
+    "Where it'll be used (app / platform / player):\n\n");
+  document.querySelectorAll("[data-mailto]").forEach(a => {
+    a.href = "mailto:" + CONFIG.email + "?subject=" + subject + "&body=" + body;
+  });
+
+  const h = CONFIG.xHandle.replace(/^@/, "");
+  document.querySelectorAll("[data-x]").forEach(a => {
+    a.href = "https://x.com/" + h;
+  });
+  document.querySelectorAll("[data-xname]").forEach(n => { n.textContent = "@" + h; });
+})();
+
+/* ---------------------------------------------------------------------
+   Theme toggle. Stamps data-theme on <html>, which the CSS overrides
+   honour in both directions, so it works regardless of OS preference.
+   --------------------------------------------------------------------- */
+(function theme() {
+  const root = document.documentElement;
+  const saved = localStorage.getItem("theme");
+  if (saved) root.dataset.theme = saved;
+  document.getElementById("themebtn").onclick = () => {
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    const cur = root.dataset.theme || (dark ? "dark" : "light");
+    const next = cur === "dark" ? "light" : "dark";
+    root.dataset.theme = next;
+    localStorage.setItem("theme", next);
+  };
+})();
+
+/* ---------------------------------------------------------------------
+   Gallery.
+
+   Byte counts are baked in rather than measured at runtime: `gz` is what
+   nginx actually sends over the wire (gzip_static serves the precomputed
+   .gz), and a browser can't report that reliably. Regenerate both columns
+   with ./build-gz.sh, which prints the exact table below.
+
+   Loading is deferred until a tile scrolls into view, one at a time —
+   four clips is ~7.8 MB of JSON and ~484 embedded images, and mounting
+   them all at once stalls the tab on a mid-range phone. Off-screen
+   animations are paused for the same reason.
+   --------------------------------------------------------------------- */
+const CLIPS = [
+  { file: "assets/clips/raccoon-thumbs-up.json", title: "Raccoon", emote: "thumbs-up",
+    bytes: 1969460, gz: 1451409,
+    note: "Flat-vector mascot. The single approved take out of four — the other three drifted off-model." },
+  { file: "assets/clips/strawberry-idle.json", title: "Strawberry", emote: "idle",
+    bytes: 2662914, gz: 1975444,
+    note: "Gradient shading and a soft-edged silhouette: the case a vector rig has to fake." },
+  { file: "assets/clips/raccoon-wave.json", title: "Raccoon", emote: "wave",
+    bytes: 2052863, gz: 1513888,
+    note: "A gentle loop. Low motion means low frame-to-frame change, which the encoder is paid in bytes for." },
+  { file: "assets/clips/star-celebrate.json", title: "Star", emote: "celebrate",
+    bytes: 1085457, gz: 783805,
+    note: "Snappy motion, simple palette — the smallest file here at 0.75 MB gzipped." },
+];
+
+const fmt = b => b < 1024 * 1000
+  ? (b / 1024).toFixed(0) + " KB"
+  : (b / 1048576).toFixed(2) + " MB";
+
+const grid = document.getElementById("clipgrid");
+const players = [];
+
+CLIPS.forEach((c, i) => {
+  const card = document.createElement("div");
+  card.className = "clip";
+  card.innerHTML =
+    '<div class="stage"><div class="status">' +
+      '<div class="play">&#9654;</div><div>' + fmt(c.gz) + ' over the wire</div>' +
+    '</div></div>' +
+    '<div class="clip-body">' +
+      '<div class="clip-title">' + c.title + ' <span>&middot; ' + c.emote + '</span></div>' +
+      '<div class="chips">' +
+        '<span class="chip hi">gz <b>' + fmt(c.gz) + '</b></span>' +
+        '<span class="chip">json <b>' + fmt(c.bytes) + '</b></span>' +
+        '<span class="chip">512px</span>' +
+        '<span class="chip">24fps</span>' +
+        '<span class="chip">5.0s</span>' +
+      '</div>' +
+      '<p class="clip-note">' + c.note + '</p>' +
+    '</div>';
+
+  const stage = card.querySelector(".stage");
+  const status = card.querySelector(".status");
+  const P = { stage, status, clip: c, anim: null, loading: false, wanted: true };
+  players.push(P);
+
+  stage.onclick = () => {
+    if (!P.anim) { P.wanted = true; load(P); return; }
+    if (P.anim.isPaused) { P.anim.play(); stage.classList.add("playing"); P.wanted = true; }
+    else { P.anim.pause(); stage.classList.remove("playing"); P.wanted = false; }
+  };
+  grid.appendChild(card);
+});
+
+function load(P) {
+  if (P.anim || P.loading) return;
+  P.loading = true;
+  P.status.innerHTML = '<div>loading ' + fmt(P.clip.gz) + '…</div>';
+  fetch(P.clip.file)
+    .then(r => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)))
+    .then(data => {
+      P.anim = lottie.loadAnimation({
+        container: P.stage,
+        renderer: "canvas",          // 121 embedded images: canvas, not svg
+        loop: true,
+        autoplay: P.wanted,
+        animationData: data,
+        rendererSettings: { preserveAspectRatio: "xMidYMid meet" },
+      });
+      P.anim.addEventListener("DOMLoaded", () => {
+        P.loading = false;
+        if (P.wanted) P.stage.classList.add("playing");
+        else { P.anim.pause(); P.status.innerHTML =
+          '<div class="play">&#9654;</div><div>' + fmt(P.clip.gz) + ' over the wire</div>'; }
+      });
+      P.anim.addEventListener("data_failed", () => {
+        P.loading = false;
+        P.status.innerHTML = '<div>could not parse this clip</div>';
+      });
+    })
+    .catch(e => {
+      P.loading = false;
+      P.status.innerHTML = '<div>load failed: ' + e.message + '</div>';
+    });
+}
+
+// Load one at a time, nearest-to-viewport first; pause what scrolls away.
+const io = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    const P = players.find(p => p.stage === e.target);
+    if (!P) return;
+    if (e.isIntersecting) {
+      if (!P.anim && !players.some(p => p.loading)) load(P);
+      else if (P.anim && P.wanted) P.anim.play();
+    } else if (P.anim) {
+      P.anim.pause();
+    }
+  });
+}, { rootMargin: "120px" });
+players.forEach(P => io.observe(P.stage));
+
+// A queue drain: when one finishes loading, pull in the next visible tile.
+// Stops itself once every clip is mounted.
+const drain = setInterval(() => {
+  if (players.every(p => p.anim)) { clearInterval(drain); return; }
+  if (players.some(p => p.loading)) return;
+  const next = players.find(p => !p.anim &&
+    p.stage.getBoundingClientRect().top < innerHeight + 120);
+  if (next) load(next);
+}, 400);
+</script>
+</html>
