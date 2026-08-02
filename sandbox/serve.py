@@ -39,6 +39,7 @@ LAYERPEELER = SANDBOX.parent
 RESEARCH = LAYERPEELER.parent
 
 SPIKE2 = LAYERPEELER / "out" / "spike2"
+PACKS = LAYERPEELER / "out" / "packs"
 MASCOTS = RESEARCH / "corpus" / "mascots"
 LEDGER = RESEARCH / "docs" / "workorders" / "hybrid-oracle-spikes" / "ledger.md"
 
@@ -50,6 +51,7 @@ VENDOR = SANDBOX / "vendor"
 # than no instrument.
 MOUNTS = {
     "/media/spike2/": SPIKE2,
+    "/media/packs/": PACKS,
     "/media/mascots/": MASCOTS,
     "/vendor/": VENDOR,
 }
@@ -386,6 +388,110 @@ def build_manifest():
     }
 
 
+def pack_ladder_of(rdir, name, base):
+    """Playable variants for one pack clip. Same shape as ladder_of()."""
+    out = []
+    raw = rdir / ("%s.json" % name)
+    if raw.exists():
+        rec = dict(lottie_head(raw), rung="raw", url=base + raw.name)
+        out.append(rec)
+    ladder_dir = rdir / "ladder"
+    if ladder_dir.is_dir():
+        for jp in sorted(ladder_dir.glob("%s.*.json" % name)):
+            rung = jp.name[len(name) + 1:-len(".json")]
+            rec = dict(lottie_head(jp), rung=rung,
+                       url=base + "ladder/" + jp.name)
+            if (jp.with_suffix(".lottie")).exists():
+                rec["dotlottie_url"] = base + "ladder/" + jp.stem + ".lottie"
+            out.append(rec)
+    rank = {r: i for i, r in enumerate(LADDER_ORDER)}
+    out.sort(key=lambda v: rank.get(v["rung"], len(LADDER_ORDER)))
+    return out
+
+
+def _pack_report(pack_dir):
+    p = pack_dir / "clips" / "ladder_report.json"
+    if not p.exists():
+        return {}
+    key = p.stat().st_mtime_ns
+    if _report_cache.get("pk:" + str(p)) != key:
+        _report_cache["pk:" + str(p)] = key
+        _report_cache["val:" + str(p)] = (read_json(p) or {}).get("runs", {})
+    return _report_cache.get("val:" + str(p), {})
+
+
+def build_pack_manifest():
+    packs = []
+    if not PACKS.is_dir():
+        return {"packs": packs, "roots": {"packs": str(PACKS), "mascots": str(MASCOTS)}}
+    for pp in sorted(PACKS.iterdir()):
+        if not pp.is_dir() or pp.name.startswith("."):
+            continue
+        clips_dir = pp / "clips"
+        if not clips_dir.is_dir():
+            continue
+        pj = read_json(pp / "pack.json") or {}
+        report = _pack_report(pp)
+        mascot_img = pj.get("mascot", pj.get("image", ""))
+        mascot_url = None
+        if mascot_img and Path(mascot_img).exists():
+            mascot_url = "/media/mascots/" + Path(mascot_img).name
+        elif mascot_img:
+            mascot_url = mascot_img
+        clips = []
+        for cd in sorted(clips_dir.iterdir()):
+            if not cd.is_dir():
+                continue
+            name = cd.name
+            gates = read_json(cd / "gates.json") or {}
+            resp = read_json(cd / "response.json") or {}
+            run_json = read_json(cd / "run.json") or {}
+            emote_spec = {}
+            for e in pj.get("emotes", []):
+                if e.get("name") == name:
+                    emote_spec = e
+                    break
+            base = "/media/packs/%s/clips/%s/" % (pp.name, name)
+
+            def opt(fname):
+                return base + fname if (cd / fname).exists() else None
+
+            # Size info from ladder_report.json
+            ladder_sizes = report.get(name, {})
+            raw_bytes = None
+            variants = pack_ladder_of(cd, name, base)
+            if variants:
+                raw_v = [v for v in variants if v.get("rung") == "raw"]
+                if raw_v:
+                    raw_bytes = raw_v[0].get("bytes")
+
+            clips.append({
+                "name": name,
+                "dir": name,
+                "prompt": emote_spec.get("prompt", resp.get("prompt", "")),
+                "seed": resp.get("seed"),
+                "gates": gates,
+                "variants": variants,
+                "raw_bytes": raw_bytes,
+                "gif": opt(name + ".gif"),
+                "sheet": opt(name + "_sheet.png"),
+                "gates_png": opt("gates.png"),
+                "mp4": opt("oracle.mp4"),
+                "lottie_url": opt(name + ".json"),
+                "ladder_sizes": ladder_sizes,
+                "emote_status": emote_spec.get("status", ""),
+            })
+        packs.append({
+            "name": pp.name,
+            "title": pj.get("pack", pp.name),
+            "character": pj.get("character", ""),
+            "created": pj.get("created_at", ""),
+            "mascot_url": mascot_url,
+            "clips": clips,
+        })
+    return {"packs": packs, "roots": {"packs": str(PACKS), "mascots": str(MASCOTS)}}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "appraisal-sandbox/1"
 
@@ -406,8 +512,12 @@ class Handler(BaseHTTPRequestHandler):
         path = unquote(urlparse(self.path).path)
         if path in ("/", "/index.html"):
             return self.send_file(SANDBOX / "index.html", cache=False)
+        if path in ("/packs", "/packs.html"):
+            return self.send_file(SANDBOX / "packs.html", cache=False)
         if path == "/api/manifest":
             return self.send_json(build_manifest())
+        if path == "/api/packs":
+            return self.send_json(build_pack_manifest())
         for prefix, root in MOUNTS.items():
             if path.startswith(prefix):
                 return self.send_mounted(root, path[len(prefix):])
@@ -517,6 +627,11 @@ def main():
         print("  %-10s %-52s %2d runs" % (w["id"], w["title"][:52], len(w["runs"])))
         if w["missing"]:
             print("             MISSING ON DISK: %s" % ", ".join(w["missing"]))
+    pm = build_pack_manifest()
+    if pm["packs"]:
+        print("\n  packs (%d)" % len(pm["packs"]))
+    for p in pm["packs"]:
+        print("  %-20s %2d clips  → /packs" % (p["name"], len(p["clips"])))
     print("\n  http://localhost:%d/   (ctrl-c to stop)\n" % port)
     try:
         httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
