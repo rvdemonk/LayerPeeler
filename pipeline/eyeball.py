@@ -1,4 +1,5 @@
-"""Appraisal artifacts — the GIF and contact sheet Claude must watch.
+"""Appraisal artifacts — the GIF, contact sheet, and edge verification sheet
+Claude must watch.
 
 Not optional decoration. Project doctrine (CLAUDE.md, "Appraisal gate"):
 nothing goes to Lewis for appraisal without Claude's own animated-sequence
@@ -13,11 +14,42 @@ that reason.
 
 Alpha is composited over a checkerboard rather than white: a matte that
 has eaten a limb and a limb that is white both look like white on white.
+Edge sheets add light, dark, and magenta backgrounds at 2x nearest-neighbour
+zoom — a full-frame sparse check cannot see a 3px doubled outline, and
+unsampled frames hide phase-dependent defects.
 """
 
 import cv2
 import numpy as np
 from PIL import Image
+from pathlib import Path
+
+
+def _checkerboard(h, w, bg=0):
+    """Return a uint8 BGR checkerboard of size (h, w).
+
+    bg=0: light (200/240), bg=1: dark (40/80), bg=2: magenta (128,0,128/255,0,255).
+    """
+    if bg == 0:
+        lo, hi = np.array([200, 200, 200]), np.array([240, 240, 240])
+    elif bg == 1:
+        lo, hi = np.array([40, 40, 40]), np.array([80, 80, 80])
+    else:
+        lo, hi = np.array([128, 0, 128]), np.array([255, 0, 255])
+    yy, xx = np.mgrid[0:h, 0:w]
+    mask = ((yy // 16 + xx // 16) % 2).astype(np.uint8)
+    board = np.where(mask[..., None], hi[None, None, :].astype(np.float32),
+                     lo[None, None, :].astype(np.float32))
+    return board
+
+
+def _composite(rgba, bg=0):
+    """Composite RGBA over a checkerboard, return BGR uint8."""
+    h, w = rgba.shape[:2]
+    board = _checkerboard(h, w, bg)
+    a = rgba[..., 3:4].astype(np.float32) / 255
+    comp = (rgba[..., :3].astype(np.float32) * a + board * (1 - a))
+    return comp.clip(0, 255).astype(np.uint8)
 
 
 def eyeball(rgba_frames, out_dir, name, fps, sheet_every=4):
@@ -26,12 +58,7 @@ def eyeball(rgba_frames, out_dir, name, fps, sheet_every=4):
     tiles, pil = [], []
     for i, fp in enumerate(rgba_frames):
         im = cv2.imread(str(fp), cv2.IMREAD_UNCHANGED)
-        h, w = im.shape[:2]
-        yy, xx = np.mgrid[0:h, 0:w]
-        checker = np.repeat((((yy // 16 + xx // 16) % 2) * 40 + 200)[..., None],
-                            3, -1).astype(np.float32)
-        a = im[..., 3:4].astype(np.float32) / 255
-        comp = (im[..., :3] * a + checker * (1 - a)).astype(np.uint8)
+        comp = _composite(im, 0)
         pil.append(Image.fromarray(cv2.cvtColor(
             cv2.resize(comp, (384, 384)), cv2.COLOR_BGR2RGB)))
         if i % sheet_every == 0:
@@ -47,3 +74,92 @@ def eyeball(rgba_frames, out_dir, name, fps, sheet_every=4):
             for r in rows]
     cv2.imwrite(str(sheet), np.vstack(rows))
     return gif, sheet
+
+
+def _edge_regions(rgba_frames, n_regions=4, crop=96, grid=3):
+    """Pick edge regions via bbox grid, sorted by boundary-pixel count.
+
+    Returns list of (cx, cy) centroids — one per selected grid cell.
+    """
+    im0 = cv2.imread(str(rgba_frames[0]), cv2.IMREAD_UNCHANGED)
+    h, w = im0.shape[:2]
+    solid = (im0[..., 3] >= 128).astype(np.uint8)
+    ys, xs = np.where(solid)
+    if len(ys) == 0:
+        return [(w // 2, h // 2)] * n_regions
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    dx, dy = (x1 - x0 + 1) / grid, (y1 - y0 + 1) / grid
+
+    boundary = solid.astype(np.int16)
+    boundary[1:-1, 1:-1] &= (
+        (solid[1:-1, 1:-1] != solid[:-2, 1:-1]) |
+        (solid[1:-1, 1:-1] != solid[2:, 1:-1]) |
+        (solid[1:-1, 1:-1] != solid[1:-1, :-2]) |
+        (solid[1:-1, 1:-1] != solid[1:-1, 2:])
+    )
+
+    scores = []
+    for gy in range(grid):
+        for gx in range(grid):
+            cx0 = int(x0 + gx * dx)
+            cx1 = int(x0 + (gx + 1) * dx + 1)
+            cy0 = int(y0 + gy * dy)
+            cy1 = int(y0 + (gy + 1) * dy + 1)
+            count = int(boundary[cy0:cy1, cx0:cx1].sum())
+            if count > 0:
+                bxs, bys = np.where(boundary[cy0:cy1, cx0:cx1])
+                scores.append((count, (cx0 + int(bxs.mean()),
+                                       cy0 + int(bys.mean()))))
+
+    scores.sort(reverse=True)
+    return [c for _, c in scores[:n_regions]]
+
+
+def edge_sheet(rgba_frames, out_dir, name,
+               sample_every=20, wink_range=range(148, 161),
+               n_regions=4, crop=96):
+    """Generate the edge verification contact sheet.
+
+    Composites 4 edge-region crops (auto-selected by silhouette boundary
+    density) at 2x nearest-neighbour zoom on light, dark, and magenta
+    checkerboards. Sweeps the full cycle: every `sample_every` frames
+    plus dense coverage of the `wink_range`.
+
+    Written to out_dir/verification/; this is the artefact the appraisal
+    gate doctrine requires Claude to sweep before showing Lewis.
+    """
+    vdir = Path(out_dir) / "verification"
+    vdir.mkdir(parents=True, exist_ok=True)
+    regions = _edge_regions(rgba_frames, n_regions, crop)
+    region_labels = ["head", "arm", "footL", "footR"][:n_regions]
+
+    full_set = set(list(range(0, len(rgba_frames), sample_every)) +
+                   list(wink_range))
+    frame_indices = sorted(f for f in full_set if f < len(rgba_frames))
+
+    bg_names = {0: "light", 1: "dark", 2: "magenta"}
+    for bg, bg_label in bg_names.items():
+        rows = []
+        for fi in frame_indices:
+            im = cv2.imread(str(rgba_frames[fi]), cv2.IMREAD_UNCHANGED)
+            h, w = im.shape[:2]
+            tiles = []
+            for (cx, cy), rlabel in zip(regions, region_labels):
+                x0 = max(0, cx - crop // 2)
+                y0 = max(0, cy - crop // 2)
+                x1 = min(w, x0 + crop)
+                y1 = min(h, y0 + crop)
+                x0 = max(0, x1 - crop)
+                y0 = max(0, y1 - crop)
+                patch = im[y0:y1, x0:x1]
+                comp = _composite(patch, bg)
+                zoomed = cv2.resize(comp, (crop * 2, crop * 2),
+                                    interpolation=cv2.INTER_NEAREST)
+                cv2.putText(zoomed, "%s f%d" % (rlabel, fi), (4, 18),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 100, 100), 1)
+                tiles.append(zoomed)
+            rows.append(np.hstack(tiles))
+        sheet = np.vstack(rows)
+        cv2.imwrite(str(vdir / ("edges_%s_%s.png" % (name, bg_label))), sheet)
+
+    return vdir

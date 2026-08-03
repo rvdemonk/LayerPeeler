@@ -1,4 +1,4 @@
-"""Stage 2.5 — rim-RGB defringe, applied after matte and before gates.
+"""Stage 2.6 — rim-RGB defringe, applied after antialias and before gates.
 
 The matte softens alpha across a colour-distance ramp (smoothstep).
 Alpha saturates (a=255) at d≥ALPHA_HI=40, but the gen frame's
@@ -34,7 +34,7 @@ SOURCE_DEPTH = 3.0     # px from solid boundary, inward
 # nearby source are left unchanged (thin isolated features with no deep
 # interior — those typically don't survive the matte anyway, and guessing
 # their colour is worse than living with a faint rim).
-MAX_PROPAGATE_DIST = 5.0
+MAX_PROPAGATE_DIST = 6.5
 
 # Must match matte.py; the solid-alias threshold that gates and encode
 # downstream depend on.
@@ -42,7 +42,7 @@ ALPHA_SOLID = 128
 
 
 def _defringe_one(rgba, maskSize=5):
-    """Repaint rim RGB in one frame. Returns uint8 BGRA array."""
+    """Repaint rim RGB in one frame. Returns uint8 BGRA array and stats dict."""
     h, w = rgba.shape[:2]
     rgb = rgba[..., :3].astype(np.float32)
     a = rgba[..., 3]
@@ -55,8 +55,11 @@ def _defringe_one(rgba, maskSize=5):
     rim_mask = (signed <= RIM_RADIUS) & (a > 0)
     source_mask = (solid == 1) & (signed >= SOURCE_DEPTH)
 
+    n_rim = int(rim_mask.sum())
+    stats = {"rim_px": n_rim, "painted": 0, "unpainted": n_rim}
+
     if source_mask.sum() == 0:
-        return rgba
+        return rgba, stats
 
     src_bin = source_mask.astype(np.int32)
     dist_src, idx = distance_transform_edt(1 - src_bin, return_indices=True)
@@ -68,7 +71,17 @@ def _defringe_one(rgba, maskSize=5):
 
     result = rgba.copy()
     result[valid_ry, valid_rx, :3] = rgba[sy[valid], sx[valid], :3]
-    return result
+    # Rim pixels without a source within cap keep their original gen-frame
+    # RGB — typically background-coloured — and show as blue speckle when
+    # composited. Fallback: median interior colour (any clean character
+    # pixel ≥3px deep), so they blend as neutral character tone instead.
+    unvalid = ~valid
+    if unvalid.any() and source_mask.any():
+        fallback = np.median(rgba[source_mask, :3], axis=0)
+        result[ry[unvalid], rx[unvalid], :3] = fallback.astype(np.uint8)
+    stats["painted"] = int(valid.sum())
+    stats["unpainted"] = n_rim - stats["painted"]
+    return result, stats
 
 
 def defringe_frames(frames, out_dir, log=None):
@@ -80,12 +93,19 @@ def defringe_frames(frames, out_dir, log=None):
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     outs = []
+    total_rim, total_painted, total_unpainted = 0, 0, 0
     for n, fp in enumerate(frames):
         im = np.array(Image.open(fp))
-        clean = _defringe_one(im)
+        clean, stats = _defringe_one(im)
         op = out_dir / fp.name
         Image.fromarray(clean).save(op, optimize=True)
         outs.append(op)
+        total_rim += stats["rim_px"]
+        total_painted += stats["painted"]
+        total_unpainted += stats["unpainted"]
         if log and n and n % 40 == 0:
             log("    defringed %d/%d" % (n, len(frames)))
+    if log:
+        log("    defringe: %d rim px total, %d painted, %d unpainted"
+            % (total_rim, total_painted, total_unpainted))
     return outs

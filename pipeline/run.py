@@ -3,6 +3,7 @@
     mascot PNG + prompt
       -> Wan 2.2 i2v (fal, turbo, 480p, looped by construction)
       -> flat-background matte + colour norm
+      -> rim-alpha anti-alias (SDF coverage ramp, interior unchanged)
       -> rim-RGB defringe (nearest-source repaint, alpha untouched)
       -> basic-integrity + colour/velocity gates
       -> 512px WebP q65 @ 24fps frame-seq Lottie (+ gzip, + .lottie)
@@ -47,7 +48,8 @@ from . import gates as G
 from . import generate as gen
 from . import ledger
 from . import master_qc
-from .eyeball import eyeball
+from .eyeball import eyeball, edge_sheet
+from .antialias import antialias_frames
 from .defringe import defringe_frames
 from .matte import matte_frames
 from .timing import Timings
@@ -148,6 +150,8 @@ def main(argv=None):
     ap.add_argument("--no-ledger", action="store_true",
                     help="do not append a ledger row (live generations "
                          "append one by default)")
+    ap.add_argument("--aa-width", type=float, default=1.25,
+                    help="half-width (px) of the SDF alpha ramp; 0 to skip")
     ap.add_argument("--force", action="store_true",
                     help="override master-QC and pre-encode integrity FAILs")
     ap.add_argument("--out", default=str(OUT))
@@ -232,6 +236,11 @@ def main(argv=None):
         with t.stage("matte", frames=len(frames)):
             rgba = matte_frames(frames, rdir / "rgba", log=log)
 
+        if args.aa_width > 0:
+            with t.stage("antialias", width=args.aa_width):
+                rgba = antialias_frames(rgba, rdir / "rgba",
+                                        width=args.aa_width, log=log)
+
         with t.stage("defringe", frames=len(rgba)):
             rgba = defringe_frames(rgba, rdir / "rgba", log=log)
 
@@ -309,6 +318,7 @@ def main(argv=None):
         if not args.no_eyeball:
             with t.stage("eyeball"):
                 eyeball(rgba, rdir, args.name, fps)
+                edge_sheet(rgba, rdir, args.name)
 
         record.update({"frames": len(frames), "fps": fps, "edge": edge,
                        "native_edge": native, "encodes": encodes})
