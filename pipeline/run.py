@@ -3,6 +3,7 @@
     mascot PNG + prompt
       -> Wan 2.2 i2v (fal, turbo, 480p, looped by construction)
       -> flat-background matte + colour norm
+      -> rim-RGB defringe (nearest-source repaint, alpha untouched)
       -> basic-integrity + colour/velocity gates
       -> 512px WebP q65 @ 24fps frame-seq Lottie (+ gzip, + .lottie)
       -> posterization + shimmer gates on the encoded assets
@@ -45,7 +46,9 @@ from . import encode as enc
 from . import gates as G
 from . import generate as gen
 from . import ledger
+from . import master_qc
 from .eyeball import eyeball
+from .defringe import defringe_frames
 from .matte import matte_frames
 from .timing import Timings
 
@@ -146,7 +149,7 @@ def main(argv=None):
                     help="do not append a ledger row (live generations "
                          "append one by default)")
     ap.add_argument("--force", action="store_true",
-                    help="encode even if basic integrity FAILS")
+                    help="override master-QC and pre-encode integrity FAILs")
     ap.add_argument("--out", default=str(OUT))
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
@@ -183,6 +186,35 @@ def main(argv=None):
               "image": args.image, "ship_profile": enc.PROFILES[ship].name}
 
     try:
+        if args.image:
+            # Snapshot the master INTO the run dir before anything reads
+            # it. Provenance lesson (frog saga, 2026-08-02): six runs
+            # recorded the same mutable corpus path while the file was
+            # overwritten five times, and no run's true input could be
+            # reconstructed afterwards. The snapshot is the input of
+            # record; the sandbox serves it, never a corpus guess.
+            src = Path(args.image).resolve()
+            snap = rdir / ("master" + src.suffix.lower())
+            shutil.copy2(src, snap)
+            import hashlib
+            record["image_snapshot"] = snap.name
+            record["image_md5"] = hashlib.md5(snap.read_bytes()).hexdigest()
+
+            # Master QC before a cent is spent: the matte's one assumption
+            # (character far from background) is checkable on the master.
+            with t.stage("master_qc"):
+                qc = master_qc.qc_master(snap, rdir / "master_qc.png")
+            record["master_qc"] = qc
+            if qc["fails"] or qc["flags"]:
+                log("  master QC:%s" % "".join(
+                    "\n    - " + x for x in qc["fails"] + qc["flags"]))
+            if qc["fails"] and not args.force:
+                raise SystemExit(
+                    "master QC FAILED — not spending. The matte will eat "
+                    "the flagged regions; see master_qc.png. Fix the "
+                    "background/feature distance in the master. "
+                    "(--force overrides)")
+
         mp4, src_meta = stage_source(args, rdir, t)
         record.update(src_meta)
         t.meta.update({k: v for k, v in src_meta.items() if k != "source"})
@@ -200,8 +232,13 @@ def main(argv=None):
         with t.stage("matte", frames=len(frames)):
             rgba = matte_frames(frames, rdir / "rgba", log=log)
 
+        with t.stage("defringe", frames=len(rgba)):
+            rgba = defringe_frames(rgba, rdir / "rgba", log=log)
+
         with t.stage("gate_integrity"):
             integ = G.basic_integrity(rgba, loop=not args.no_loop)
+        with t.stage("gate_holes"):
+            hole_g = G.holes(rgba)
         with t.stage("gate_strips"):
             strip_g, series = G.strips(rgba)
             G.draw_strips(series, strip_g, rdir / "gates.png")
@@ -209,11 +246,12 @@ def main(argv=None):
         with t.stage("gate_identity"):
             ident = G.identity(rgba)
 
-        pre = G.verdict(integ, strip_g, ident)
+        pre = G.verdict(integ, hole_g, strip_g, ident)
         log("  integrity/strips: %s%s" % (pre["verdict"], "".join(
             "\n    - " + x for x in pre["fails"] + pre["flags"])))
         if pre["fails"] and not args.force:
             record["gates"] = {**pre, "detail": {"integrity": integ,
+                                                 "holes": hole_g,
                                                  "strips": strip_g,
                                                  "identity": ident}}
             raise SystemExit("basic integrity FAILED — not encoding. "
@@ -247,19 +285,21 @@ def main(argv=None):
         for f in ship_assets:
             Path(f).unlink(missing_ok=True)
 
-        final = G.verdict(integ, strip_g, ident, post, shim)
+        final = G.verdict(integ, hole_g, strip_g, ident, post, shim)
         # Flat scalars first: the appraisal sandbox reads specific keys off
         # the top level of gates.json, and nested detail would hide them.
         gates_out = {**{k: v for k, v in integ.items()
                         if k not in ("fails", "flags")},
+                     "holes_max_px": hole_g["holes_max_px"],
+                     "holes_median_px": hole_g["holes_median_px"],
                      **{k: v for k, v in strip_g.items() if k != "flags"},
                      **{k: v for k, v in ident.items() if k != "flags"},
                      "posterization_dE": (post.get("worst_frame") or {})
                      .get("deltaE_mean"),
                      "shimmer_ratio": shim.get("ratio"),
                      **final,
-                     "detail": {"integrity": integ, "strips": strip_g,
-                                "identity": ident,
+                     "detail": {"integrity": integ, "holes": hole_g,
+                                "strips": strip_g, "identity": ident,
                                 "posterization": post, "shimmer": shim}}
         G.write(gates_out, rdir / "gates.json")
         record["gates"] = gates_out

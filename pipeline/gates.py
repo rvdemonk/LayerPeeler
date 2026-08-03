@@ -80,6 +80,27 @@ BORDER_FRAC_FAIL = 0.005      # >0.5% of the mask on the outer ring
 CENTROID_FRAC_FAIL = 0.25     # centroid travel, as a fraction of the edge
 FROZEN_RUN_FAIL = 3           # N identical consecutive frames
 LOOP_IOU_FAIL = 0.75
+# Interior holes (see holes()). Corpus calibration 2026-08-02, eight runs:
+# ship-breaking damage (frog r037/r041/r042 eaten eyes) sits at median
+# >3000 px/frame; Lewis-passed clips sit at median <200 (raccoon-wave 174 —
+# pale chest fur, real but invisible loss; r039 3). A transient pocket (an
+# armpit closing mid-wave) spikes max without median, so BOTH fire-lines
+# are needed: median for persistent feature loss, max for one-frame
+# catastrophes.
+HOLES_MEDIAN_FAIL_PX = 200    # persistent loss, px/frame (absolute @512)
+HOLES_MAX_FAIL_PX = 1500      # one-frame catastrophe, px (absolute @512)
+HOLES_MEDIAN_FAIL_FRAC = 0.003   # or these fractions of median mask area
+HOLES_MAX_FAIL_FRAC = 0.02
+HOLE_MIN_PX = 8               # components smaller than this are matte noise
+# Pocket discrimination, measured on the corpus's enclosed components
+# 2026-08-02: flat painted gaps (star leg-gap, strawberry shadow-gap)
+# sit at laplacian p50 <=2.4 and d p50 <=5.4; eaten features (frog eyes,
+# blob body, raccoon fur) at lap p50 >=4.2 and d p50 >=10. Both margins
+# are thin; provisional until more mascots are scored.
+HOLE_POCKET_LAP = 3.0         # eroded-interior laplacian p50 below = flat
+HOLE_POCKET_D = 8.0           # eroded-interior d-to-bg p50 below = bg-like
+HOLE_POCKET_MAX_PX = 500      # @512px, scaled by area: small solid-walled
+                              # components are pockets regardless of texture
 
 # FLAG = screening signal, calibrated against the corpus distribution, not
 # against a spec. Provisional: only the posterization pair and the shimmer
@@ -232,6 +253,121 @@ def basic_integrity(frames, loop=True):
         if loop_ssim < LOOP_SSIM_FLAG:
             flags.append("loop seam (SSIM %.3f)" % loop_ssim)
     g["fails"], g["flags"] = fails, flags
+    return g
+
+
+def holes(frames):
+    """Interior-hole census: transparent pixels ENCLOSED by character.
+
+    Provenance: the frog eye saga (r037-r042, 2026-08-02). The matte keys
+    on colour distance, so any feature within ~26 RGB units of the
+    background loses alpha — the frog's shaded eye whites sat at d~13 from
+    a cream background and were eaten in three runs, while global metrics
+    (SSIM, silhouette) passed and the sandbox's light checkerboard hid the
+    bite. Every one of those runs had thousands of interior-hole pixels in
+    the eye band; the healthy run (r039) had 2-7.
+
+    Two transparent components are distinguished by what the GENERATED
+    frame painted inside them, because colour distance cannot separate
+    them (star's genuine leg-gap sits at d=9 from bg; the frog's eaten
+    eye whites at d=13 — overlapping ranges), and neither can topology
+    (a closed leg-gap can be walled in by limbs thicker than an eye rim):
+
+      POCKET (ignored) — genuine enclosed background: a between-legs gap,
+      an armpit at a closed moment. The gen frame painted FLAT background
+      there (the same painted surface as outside, locally shaded). Tested
+      on the component's eroded interior, so a passing silhouette edge
+      can't masquerade as texture.
+
+      EATEN FEATURE (counted) — the gen frame painted a STRUCTURED surface
+      there: eye-white gradient, fur, blob shading. Texture or colour
+      shift beyond the flat-bg distribution = the matte removed art.
+
+    …plus a size carve-out for the residue the flatness test misses:
+    small solid-walled gaps (strawberry armpits read as textured because
+    a passing limb edge dominates a 200px region). Corpus geometry says
+    genuine pockets are small and feature loss is not: at 512px the
+    strawberry gaps measure 198-237px, the frog's eaten eyes 1765px and
+    blob's eaten body 700-820px. HOLE_POCKET_MAX_PX sits in that gap.
+
+    The mean RGB of the hole pixels rides along: it names WHAT was eaten
+    for the recovery decision, which lives upstream in master_qc — this
+    gate detects, that one prevents.
+
+    FAIL lines, provisional: corpus calibration 2026-08-02 — ship-breaking
+    damage (frog r037/r041/r042) at median >3000 px/frame; Lewis-passed
+    clips at median <200 (raccoon-wave 174, real-but-invisible fur loss).
+    Median fires on persistent loss, max on one-frame catastrophes.
+    """
+    kern3 = np.ones((7, 7), np.uint8)
+    per_frame, worst, worst_n = [], None, 0
+    mask_areas = []
+    for i, fp in enumerate(frames):
+        im = _load(fp)
+        m = _mask(im)
+        mask_areas.append(int(m.sum()))
+        transp = (~m).astype(np.uint8)
+        ncc, cc, stats, _ = cv2.connectedComponentsWithStats(transp)
+        border_ids = set(np.unique(
+            np.concatenate([cc[0], cc[-1], cc[:, 0], cc[:, -1]]))) - {0}
+        # The RGBA frame's RGB channels ARE the (colour-normed) generated
+        # pixels — the matte zeroes alpha, never colour — so the generated
+        # surface inside a hole is readable right here.
+        gen = im[..., :3].astype(np.float32)
+        border = np.concatenate([gen[:8].reshape(-1, 3), gen[-8:].reshape(-1, 3),
+                                 gen[:, :8].reshape(-1, 3), gen[:, -8:].reshape(-1, 3)])
+        bg = np.median(border, axis=0)
+        d = np.linalg.norm(gen - bg, axis=-1)
+        lap = np.abs(cv2.Laplacian(cv2.cvtColor(gen, cv2.COLOR_BGR2GRAY),
+                                   cv2.CV_32F, ksize=3))
+        eaten = np.zeros_like(transp)
+        pocket_max = HOLE_POCKET_MAX_PX * (im.shape[0] * im.shape[1]) / (512.0 * 512.0)
+        for j in range(1, ncc):
+            if j in border_ids:
+                continue
+            if stats[j, cv2.CC_STAT_AREA] < HOLE_MIN_PX:
+                continue
+            comp = cc == j
+            core = cv2.erode(comp.astype(np.uint8), kern3).astype(bool)
+            sample = core if core.any() else comp
+            if stats[j, cv2.CC_STAT_AREA] < pocket_max:
+                continue                      # small solid-walled gap: pocket
+            if (np.percentile(lap[sample], 50) < HOLE_POCKET_LAP
+                    and np.percentile(d[sample], 50) < HOLE_POCKET_D):
+                continue                      # flat painted background: pocket
+            eaten |= comp.astype(np.uint8)
+        n = int(eaten.sum())
+        per_frame.append(n)
+        if n > worst_n:
+            worst_n = n
+            ys, xs = np.nonzero(eaten)
+            worst = {
+                "frame": i, "px": n,
+                "bbox": [int(xs.min()), int(ys.min()),
+                         int(xs.max()), int(ys.max())],
+                "mean_rgb": [float(v) for v in im[..., :3][eaten.astype(bool)].mean(0)[::-1]],
+            }
+    med_mask = float(np.median(mask_areas)) if mask_areas else 0.0
+    med = float(np.median(per_frame)) if per_frame else 0.0
+    g = {"holes_max_px": int(max(per_frame) if per_frame else 0),
+         "holes_median_px": int(med),
+         "holes_worst": worst}
+    med_thresh = max(HOLES_MEDIAN_FAIL_PX, HOLES_MEDIAN_FAIL_FRAC * med_mask)
+    max_thresh = max(HOLES_MAX_FAIL_PX, HOLES_MAX_FAIL_FRAC * med_mask)
+    fails = []
+    if med > med_thresh:
+        fails.append("persistent interior transparency: %d px/frame median "
+                     "(worst %d px frame %d, bbox %s, mean RGB %s) — the "
+                     "matte ate an enclosed feature"
+                     % (med, worst["px"], worst["frame"], worst["bbox"],
+                        [round(v) for v in worst["mean_rgb"] or []]))
+    elif worst_n > max_thresh:
+        fails.append("%d interior transparent px in frame %d (bbox %s, mean "
+                     "RGB %s) — matte ate an enclosed feature"
+                     % (worst["px"], worst["frame"], worst["bbox"],
+                        [round(v) for v in worst["mean_rgb"] or []]))
+    g["fails"] = fails
+    g["flags"] = []
     return g
 
 

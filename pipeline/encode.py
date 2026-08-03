@@ -146,7 +146,7 @@ def pack_lottie(frames, size, fr, path, mime="webp"):
     for i, fp in enumerate(frames):
         b64 = base64.b64encode(Path(fp).read_bytes()).decode()
         assets.append({"id": "f%d" % i, "w": size, "h": size,
-                       "u": "", "p": "data:image/%s;base64,%s" % (mime, b64),
+                       "p": "data:image/%s;base64,%s" % (mime, b64),
                        "e": 1})
         layers.append({"ddd": 0, "ind": i + 1, "ty": 2, "nm": "f%d" % i,
                        "refId": "f%d" % i, "ip": i, "op": i + 1, "st": 0,
