@@ -9,21 +9,17 @@ model here is: media stays on disk and is served by relative path, the
 page is a static shell, and the run list is a JSON manifest regenerated
 on every request. Nothing is ever overwritten; new runs simply appear.
 
-Two mount prefixes because the artifacts and the inputs live in
-different trees: out/spike2/ is inside the LayerPeeler repo, while
-corpus/mascots/ sits beside it in the research root. Symlinks would
-either leak outside the repo or break on checkout, so the handler maps
-URL prefixes to absolute roots and refuses anything that resolves out of
-them.
+Multi-root: the sandbox can merge runs from multiple output trees
+(out/spike2, out/pipeline) into one timeline. Each run carries a "root"
+label so the frontend can show provenance. Dedup: if the same run dir
+exists in multiple roots, the later root wins (pipeline over spike2).
+The first root in the list is "primary" — its waves.json and
+ladder_report.json supply wave metadata and size estimates.
 
-The manifest merges three sources of truth, none of which is edited here:
-  - sandbox/waves.json      which runs belong to which wave (curated, VERSIONED)
-  - the out/spike2/ dir scan what actually exists on disk (ground truth)
-  - docs/workorders/hybrid-oracle-spikes/ledger.md  the verdicts (prose)
-A run dir in no wave lands in a synthetic "current" wave, so output can
-never be invisible just because the manifest wasn't updated.
-
-Usage: python3 sandbox/serve.py [port]
+Usage:
+  python3 sandbox/serve.py [port]                              # default: spike2 + pipeline
+  python3 sandbox/serve.py --roots out/spike2,out/pipeline [port]
+  python3 sandbox/serve.py --root out/spike2 [port]            # single root (backward compat)
 """
 
 import json
@@ -38,23 +34,22 @@ SANDBOX = Path(__file__).resolve().parent
 LAYERPEELER = SANDBOX.parent
 RESEARCH = LAYERPEELER.parent
 
-SPIKE2 = LAYERPEELER / "out" / "spike2"
 PACKS = LAYERPEELER / "out" / "packs"
 MASCOTS = RESEARCH / "corpus" / "mascots"
 LEDGER = RESEARCH / "docs" / "workorders" / "hybrid-oracle-spikes" / "ledger.md"
 
 VENDOR = SANDBOX / "vendor"
 
+# Each root is a (name, Path) tuple. Name becomes the URL prefix label
+# (/media/{name}/) and the source-tree badge in the frontend. Order
+# matters: later roots override earlier ones on dir-name collision.
+ROOTS = []
+
 # URL prefix -> absolute root. Everything else 404s.
 # lottie-web is vendored, never a CDN: the sandbox has to work offline and
 # an appraisal instrument that silently changes version under you is worse
 # than no instrument.
-MOUNTS = {
-    "/media/spike2/": SPIKE2,
-    "/media/packs/": PACKS,
-    "/media/mascots/": MASCOTS,
-    "/vendor/": VENDOR,
-}
+MOUNTS = {}
 
 # 8646, not the more obvious 8642: a long-lived `python -m http.server 8642`
 # of Lewis's already owns that port, and a preview that collides on launch
@@ -182,7 +177,7 @@ def lottie_head(path):
     return rec
 
 
-def ladder_of(rdir, name, base):
+def ladder_of(rdir, name, base, ladder_report=None):
     """Playable variants for one run: the raw pack plus every ladder rung.
 
     Disk is the source of truth (a rung exists iff its JSON is there);
@@ -190,7 +185,7 @@ def ladder_of(rdir, name, base):
     cannot be read off the filesystem. The player loads plain JSON — the
     .lottie zips are for size measurement and shipping, not playback.
     """
-    rep = _ladder_report().get(name, {})
+    rep = (ladder_report or {}).get(name, {})
     sizes = rep.get("ladder", {})
     out = []
     raw = rdir / ("%s.json" % name)
@@ -226,21 +221,31 @@ def ladder_of(rdir, name, base):
 _report_cache = {}
 
 
-def _ladder_report():
-    p = SPIKE2 / "ladder_report.json"
+def _ladder_report(root_path):
+    p = root_path / "ladder_report.json"
     if not p.exists():
         return {}
+    cache_key = "ladder:" + str(root_path)
     key = p.stat().st_mtime_ns
-    if _report_cache.get("key") != key:
-        _report_cache["key"] = key
-        _report_cache["val"] = (read_json(p) or {}).get("runs", {})
-    return _report_cache["val"]
+    if _report_cache.get(cache_key) != key:
+        _report_cache[cache_key] = key
+        _report_cache["val:" + cache_key] = (read_json(p) or {}).get("runs", {})
+    return _report_cache.get("val:" + cache_key, {})
 
 
-def mascot_of(run_dir):
-    """Run dirs are named <mascot>-<motion>[n]; the input image is the
-    mascot prefix. Matched against what is actually in corpus/mascots/ so
-    a hyphenated future mascot name still resolves."""
+def mascot_of(run_dir, rdir=None, root_name="spike2"):
+    """The run's input image. Prefer the per-run snapshot (pipeline.run
+    copies the consumed master into the run dir since 2026-08-02 — the
+    record of what was ACTUALLY fed to Wan). Fall back to prefix-matching
+    the run dir name against corpus/mascots/ — a legacy heuristic that
+    serves the corpus file's CURRENT content, which burned the frog
+    appraisal: all six frog-wave cards showed the same mutable frog.jpg,
+    blotch and all, regardless of what each run consumed."""
+    if rdir is not None:
+        for snap in sorted(rdir.glob("master.*")):
+            if snap.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+                stem = run_dir.split("-")[0]
+                return stem, "/media/%s/%s/%s" % (root_name, run_dir, snap.name)
     for img in sorted(MASCOTS.glob("*.jpg")) + sorted(MASCOTS.glob("*.png")):
         if run_dir == img.stem or run_dir.startswith(img.stem + "-"):
             return img.stem, "/media/mascots/" + img.name
@@ -273,16 +278,16 @@ def guess_ledger_id(ledger, mascot, prompt, seed):
     return None
 
 
-def describe_run(entry, ledger):
+def describe_run(entry, ledger, root_name="spike2", root_path=None, ladder_report=None):
     """Build one manifest run record from disk + ledger."""
     name = entry.get("dir")
-    rdir = SPIKE2 / name
+    rdir = (root_path or ROOTS[0][1]) / name
     if not rdir.is_dir():
         return None
 
     gates = read_json(rdir / "gates.json") or {}
     resp = read_json(rdir / "response.json") or {}
-    mascot, mascot_url = mascot_of(name)
+    mascot, mascot_url = mascot_of(name, rdir, root_name)
 
     lid = entry.get("ledger")
     if not lid:
@@ -295,13 +300,14 @@ def describe_run(entry, ledger):
         m = re.search(r'"(.*)"', lrow.get("input", ""))
         prompt = m.group(1) if m else ""
 
-    base = "/media/spike2/" + name + "/"
+    base = "/media/%s/%s/" % (root_name, name)
 
     def opt(fname):
         return base + fname if (rdir / fname).exists() else None
 
     return {
         "dir": name,
+        "root": root_name,
         "ledger_id": lid,
         "mascot": mascot,
         "mascot_url": mascot_url,
@@ -314,7 +320,7 @@ def describe_run(entry, ledger):
         "gates_png": opt("gates.png"),
         "mp4": opt("oracle.mp4"),
         "lottie": opt(name + ".json"),
-        "variants": ladder_of(rdir, name, base),
+        "variants": ladder_of(rdir, name, base, ladder_report),
         "mtime": int((rdir / "gates.json").stat().st_mtime)
         if (rdir / "gates.json").exists()
         else int(rdir.stat().st_mtime),
@@ -324,14 +330,21 @@ def describe_run(entry, ledger):
 def build_manifest():
     """Merge waves.json, the dir scan and the ledger into render-ready JSON.
 
-    Waves come back newest-first because appraisal starts from the latest
-    batch; the synthetic 'current' wave (unassigned dirs) sorts first of
-    all, since anything not yet curated is by definition the newest thing
-    on disk and the thing awaiting an eyeball.
+    Scans all roots in ROOTS order. Later roots override earlier ones on
+    dir-name collision (e.g. pipeline's frog-wave supersedes spike2's if
+    both exist). Waves come from the primary (first) root's waves.json and
+    are listed newest-first. Unassigned dirs from any root land in a
+    synthetic "current" wave at the top.
+
+    Each run record carries a "root" key naming its source tree so the
+    frontend can display provenance.
     """
     ledger = parse_ledger()
-    decl = read_json(SANDBOX / "waves.json") or read_json(SPIKE2 / "waves.json") or {}
+    primary_root_path = ROOTS[0][1] if ROOTS else None
+    decl = read_json(SANDBOX / "waves.json") or (read_json(primary_root_path / "waves.json") if primary_root_path else None) or {}
     waves_in = decl.get("waves", [])
+
+    ladder_reports = {name: _ladder_report(path) for name, path in ROOTS}
 
     waves, claimed = [], set()
     for w in waves_in:
@@ -341,9 +354,16 @@ def build_manifest():
         runs = []
         for e in entries:
             claimed.add(e.get("dir"))
-            rec = describe_run(e, ledger)
-            if rec:
-                runs.append(rec)
+            found = False
+            for root_name, root_path in reversed(ROOTS):
+                rec = describe_run(e, ledger, root_name, root_path,
+                                   ladder_reports.get(root_name))
+                if rec:
+                    runs.append(rec)
+                    found = True
+                    break
+            if not found:
+                pass  # missing on disk
         waves.append(
             {
                 "id": w.get("id") or w.get("title", "wave"),
@@ -351,17 +371,23 @@ def build_manifest():
                 "date": w.get("date", ""),
                 "note": w.get("note", ""),
                 "runs": runs,
-                "missing": [e["dir"] for e in entries if not (SPIKE2 / e["dir"]).is_dir()],
+                "missing": [e["dir"] for e in entries if not any(
+                    (root_path / e["dir"]).is_dir() for _, root_path in ROOTS
+                )],
             }
         )
     waves.reverse()
 
     loose = []
-    for p in sorted(SPIKE2.iterdir()):
-        if p.is_dir() and p.name not in claimed and not p.name.startswith("."):
-            rec = describe_run({"dir": p.name}, ledger)
-            if rec:
-                loose.append(rec)
+    seen_dirs = claimed.copy()
+    for root_name, root_path in ROOTS:
+        for p in sorted(root_path.iterdir()):
+            if p.is_dir() and p.name not in seen_dirs and not p.name.startswith("."):
+                seen_dirs.add(p.name)
+                rec = describe_run({"dir": p.name}, ledger, root_name, root_path,
+                                   ladder_reports.get(root_name))
+                if rec:
+                    loose.append(rec)
     if loose:
         loose.sort(key=lambda r: -r["mtime"])
         waves.insert(
@@ -381,10 +407,13 @@ def build_manifest():
     sig = [(r["dir"], r["mtime"],
             tuple((v["rung"], v["bytes"]) for v in r["variants"]))
            for w in waves for r in w["runs"]]
+    root_info = {name: str(path) for name, path in ROOTS}
+    root_info["mascots"] = str(MASCOTS)
+    root_info["ledger"] = str(LEDGER)
     return {
         "waves": waves,
         "signature": str(hash((tuple(sig), LEDGER.stat().st_mtime if LEDGER.exists() else 0))),
-        "roots": {"spike2": str(SPIKE2), "mascots": str(MASCOTS), "ledger": str(LEDGER)},
+        "roots": root_info,
     }
 
 
@@ -596,33 +625,48 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404, "gone")
 
 
-def set_root(path):
-    """Point the sandbox at a different tree of run dirs.
-
-    The consolidated pipeline writes to out/pipeline/ rather than
-    out/spike2/, in the same per-run layout (rgba/, ladder/, gates.json,
-    the GIF and sheet) and with a ladder_report.json in the same shape.
-    Rather than fork the player, the root is swappable: one appraisal
-    instrument, two trees, no second copy to drift.
-    """
-    global SPIKE2
-    SPIKE2 = Path(path).resolve()
-    MOUNTS["/media/spike2/"] = SPIKE2
-    _report_cache.clear()
+def add_root(name, path):
+    """Register one run-tree root. The name becomes the URL prefix label
+    (/media/{name}/) and the frontend badge text."""
+    global ROOTS, MOUNTS
+    p = Path(path).resolve()
+    ROOTS.append((name, p))
+    MOUNTS["/media/%s/" % name] = p
 
 
 def main():
     argv = sys.argv[1:]
-    if "--root" in argv:
-        i = argv.index("--root")
-        set_root(argv[i + 1])
+    if "--roots" in argv:
+        i = argv.index("--roots")
+        for root_spec in argv[i + 1].split(","):
+            root_spec = root_spec.strip()
+            p = (LAYERPEELER / root_spec).resolve()
+            name = p.name
+            add_root(name, p)
         del argv[i:i + 2]
+    elif "--root" in argv:
+        i = argv.index("--root")
+        p = (LAYERPEELER / argv[i + 1]).resolve()
+        add_root(p.name, p)
+        del argv[i:i + 2]
+    else:
+        add_root("spike2", LAYERPEELER / "out" / "spike2")
+        add_root("pipeline", LAYERPEELER / "out" / "pipeline")
+
+    # Static mounts — these are always available regardless of roots.
+    MOUNTS["/media/packs/"] = PACKS
+    MOUNTS["/media/mascots/"] = MASCOTS
+    MOUNTS["/vendor/"] = VENDOR
+
     port = int(argv[0]) if argv else DEFAULT_PORT
-    if not SPIKE2.is_dir():
-        sys.exit("no run dir: %s" % SPIKE2)
+    for name, p in ROOTS:
+        if not p.is_dir():
+            sys.exit("no run dir: %s (%s)" % (p, name))
     man = build_manifest()
     n = sum(len(w["runs"]) for w in man["waves"])
-    print("appraisal sandbox — %d waves, %d runs" % (len(man["waves"]), n))
+    print("appraisal sandbox — %d roots, %d waves, %d runs" % (len(ROOTS), len(man["waves"]), n))
+    for name, p in ROOTS:
+        print("  root %-12s → %s" % (name + ":", p))
     for w in man["waves"]:
         print("  %-10s %-52s %2d runs" % (w["id"], w["title"][:52], len(w["runs"])))
         if w["missing"]:
