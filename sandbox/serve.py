@@ -543,6 +543,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(SANDBOX / "index.html", cache=False)
         if path in ("/packs", "/packs.html"):
             return self.send_file(SANDBOX / "packs.html", cache=False)
+        if path in ("/playground", "/playground.html"):
+            return self.send_file(SANDBOX / "playground.html", cache=False)
+        if path in ("/pet", "/pet.html"):
+            return self.send_file(SANDBOX / "pet.html", cache=False)
         if path == "/api/manifest":
             return self.send_json(build_manifest())
         if path == "/api/packs":
