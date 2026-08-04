@@ -427,7 +427,7 @@
   // layers. The old frame is never removed before the new one is drawn, so
   // there is no blank gap. (Verified against lottie-web: on data complete
   // it runs gotoFrame() — first frame painted — then fires DOMLoaded.)
-  let anim = null, pendingAnim = null, activeLayer = 'a';
+  let pendingAnim = null, activeLayer = 'a';
   const frogA = document.getElementById('frog-a');
   const frogB = document.getElementById('frog-b');
   const layerOn = (l) => { l.classList.remove('off'); l.classList.add('on'); };
