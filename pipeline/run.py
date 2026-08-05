@@ -163,7 +163,8 @@ def _git_fingerprint():
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="mascot PNG + prompt -> gated, shippable Lottie")
-    ap.add_argument("--name", required=True, help="run dir name")
+    ap.add_argument("--name", help="run dir name (default: <parent>-<tag> "
+                                   "under --derive-from)")
     ap.add_argument("--image", help="mascot PNG/JPG (required unless --from-video)")
     ap.add_argument("--prompt", help="animation prompt")
     ap.add_argument("--from-video", help="skip generation; use this mp4")
@@ -181,6 +182,19 @@ def main(argv=None):
     ap.add_argument("--no-ledger", action="store_true",
                     help="do not append a ledger row (live generations "
                          "append one by default)")
+    ap.add_argument("--derive-from", metavar="PARENT",
+                    help="fork a DERIVED run from an existing run dir: adopt "
+                         "the parent's oracle.mp4 + response.json (same seed, "
+                         "same r-id) + master.*, record derived_from + "
+                         "stage_delta_note, and imply --no-ledger. The new "
+                         "dir is immutable; the parent is never touched.")
+    ap.add_argument("--tag", metavar="TAG",
+                    help="claim of intent for a derived run (e.g. aa4x); "
+                         "required with --derive-from, becomes the run-dir "
+                         "suffix <parent>-<tag> and the stage_delta_note")
+    ap.add_argument("--clobber", action="store_true",
+                    help="overwrite an existing run dir in place (default: "
+                         "hard-error naming --clobber vs --derive-from)")
     ap.add_argument("--aa-width", type=float, default=1.25,
                     help="half-width (px) of the SDF alpha ramp; 0 to skip")
     ap.add_argument("--no-defringe", action="store_true",
@@ -192,8 +206,8 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
-    if not args.from_video and not (args.image and args.prompt):
-        ap.error("--image and --prompt are required unless --from-video")
+    if not args.derive_from and not args.name:
+        ap.error("--name is required unless --derive-from supplies it")
     profiles = [p.strip() for p in args.profiles.split(",") if p.strip()]
     unknown = [p for p in profiles if p not in enc.PROFILES]
     if unknown:
@@ -215,13 +229,80 @@ def main(argv=None):
         return 0
 
     out_root = Path(args.out)
+
+    # --derive-from: fork a derived run from an existing generation. The
+    # derived run is a new sibling dir (<parent>-<tag>) that inherits the
+    # parent's provenance (oracle.mp4, response.json → same seed → same
+    # r-id, master snapshot) and records derived_from + stage_delta_note.
+    # It is never a new generation: no ledger row.
+    if args.derive_from:
+        if not args.tag:
+            ap.error("--derive-from requires --tag (the claim of intent, "
+                     "e.g. aa4x)")
+        if args.from_video:
+            ap.error("--derive-from adopts the parent's oracle.mp4; "
+                     "--from-video is mutually exclusive")
+        if not args.name:
+            args.name = "%s-%s" % (args.derive_from, args.tag)
+        parent_dir = out_root / args.derive_from
+        if not parent_dir.is_dir():
+            ap.error("--derive-from parent not found: %s" % parent_dir)
+        if not (parent_dir / "oracle.mp4").exists():
+            ap.error("--derive-from parent has no oracle.mp4: %s"
+                     % (parent_dir / "oracle.mp4"))
+        args.from_video = str(parent_dir / "oracle.mp4")
+        args.no_ledger = True
+
+    if not args.from_video and not (args.image and args.prompt):
+        ap.error("--image and --prompt are required unless --from-video")
+
+    # No-clobber: a run dir is a generation artifact, never silently
+    # overwritten. An accidental re-run hard-errors and teaches the two
+    # escapes. This is the guard that makes derived runs necessary and safe.
     rdir = out_root / args.name
+    if rdir.exists() and not args.clobber:
+        ap.error(
+            "run dir already exists: %s\n"
+            "  A run dir is a generation artifact — it is never silently "
+            "overwritten.\n"
+            "  Escape hatches:\n"
+            "    --clobber                             overwrite in place\n"
+            "    --derive-from <parent> --tag <tag>    fork a sibling that "
+            "inherits the parent's provenance" % rdir)
     rdir.mkdir(parents=True, exist_ok=True)
     t = Timings(args.name, {"tier": args.tier, "resolution": args.resolution,
                             "profiles": profiles})
     scratch = Path(tempfile.mkdtemp(prefix="pipeline-%s-" % args.name))
     record = {"name": args.name, "prompt": args.prompt,
               "image": args.image, "ship_profile": enc.PROFILES[ship].name}
+
+    if args.derive_from:
+        # Inherit provenance BEFORE anything else writes to the run dir.
+        # response.json carries the seed → the sandbox resolves the same
+        # r-id; master.* is the identity anchor the sandbox player needs.
+        for name in ("response.json", "oracle.mp4"):
+            src = parent_dir / name
+            if src.exists():
+                shutil.copy2(src, rdir / name)
+        for m in parent_dir.glob("master.*"):
+            shutil.copy2(m, rdir / m.name)
+        parent_rj = parent_dir / "run.json"
+        if parent_rj.exists():
+            try:
+                pj = json.loads(parent_rj.read_text())
+            except ValueError:
+                pj = {}
+        else:
+            pj = {}
+        record["derived_from"] = args.derive_from
+        record["stage_delta_note"] = args.tag
+        record["prompt"] = record["prompt"] or pj.get("prompt")
+        record["image"] = record["image"] or pj.get("image")
+        record["image_md5"] = pj.get("image_md5")
+        record["image_snapshot"] = pj.get("image_snapshot")
+        record["seed"] = pj.get("seed")
+        if pj.get("master_qc"):
+            record["master_qc"] = pj["master_qc"]
 
     try:
         if args.image:
