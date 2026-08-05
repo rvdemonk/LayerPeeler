@@ -37,6 +37,7 @@ Env: FAL_KEY, only for live generation (set -a; source ~/.env; set +a).
 import argparse
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -129,6 +130,36 @@ def _merge_sandbox_report(record, path):
                                indent=1))
 
 
+def _git_fingerprint():
+    """Commit fingerprint of the producing pipeline, or None on any failure.
+
+    Provenance doctrine (sandbox-overhaul-v1 §6): run.json must record the
+    exact LayerPeeler git state that produced the run. Git is allowed to be
+    absent, slow, or the repo moved — a missing fingerprint means the badge
+    shows "pre-fingerprint"; a crashed run is not an acceptable price.
+    """
+    root = Path(__file__).resolve().parent.parent
+
+    def _git(args):
+        return subprocess.run(["git"] + args, cwd=str(root), check=False,
+                              capture_output=True, text=True, timeout=2)
+
+    try:
+        head = _git(["rev-parse", "HEAD"])
+        if head.returncode != 0:
+            return None
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+        status = _git(["status", "--porcelain"])
+        if branch.returncode != 0 or status.returncode != 0:
+            return None
+        return {"repo": root.name,
+                "branch": branch.stdout.strip(),
+                "commit": head.stdout.strip(),
+                "dirty": bool(status.stdout.strip())}
+    except Exception:
+        return None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="mascot PNG + prompt -> gated, shippable Lottie")
@@ -152,6 +183,9 @@ def main(argv=None):
                          "append one by default)")
     ap.add_argument("--aa-width", type=float, default=1.25,
                     help="half-width (px) of the SDF alpha ramp; 0 to skip")
+    ap.add_argument("--no-defringe", action="store_true",
+                    help="skip the rim-RGB defringe stage (flat art may prefer "
+                         "crisp outlines over rim repaint)")
     ap.add_argument("--force", action="store_true",
                     help="override master-QC and pre-encode integrity FAILs")
     ap.add_argument("--out", default=str(OUT))
@@ -241,8 +275,9 @@ def main(argv=None):
                 rgba = antialias_frames(rgba, rdir / "rgba",
                                         width=args.aa_width, log=log)
 
-        with t.stage("defringe", frames=len(rgba)):
-            rgba = defringe_frames(rgba, rdir / "rgba", log=log)
+        if not args.no_defringe:
+            with t.stage("defringe", frames=len(rgba)):
+                rgba = defringe_frames(rgba, rdir / "rgba", log=log)
 
         with t.stage("gate_integrity"):
             integ = G.basic_integrity(rgba, loop=not args.no_loop)
@@ -343,6 +378,7 @@ def main(argv=None):
         shutil.rmtree(scratch, ignore_errors=True)
         t.write(rdir / "timings.json")
         record["timings"] = t.record()
+        record["pipeline"] = _git_fingerprint()
         (rdir / "run.json").write_text(json.dumps(record, indent=1,
                                                   default=float))
 
