@@ -187,7 +187,12 @@ def main(argv=None):
                          "the parent's oracle.mp4 + response.json (same seed, "
                          "same r-id) + master.*, record derived_from + "
                          "stage_delta_note, and imply --no-ledger. The new "
-                         "dir is immutable; the parent is never touched.")
+                         "dir is immutable; the parent is never touched. "
+                         "PARENT is a sibling run name in --out, OR a path to "
+                         "a run dir in ANOTHER root (e.g. out/spike2/foo) — "
+                         "cross-root parents must be expressible, else the "
+                         "only move is a raw --from-video, which inherits "
+                         "NOTHING and silently orphans the r-id.")
     ap.add_argument("--tag", metavar="TAG",
                     help="claim of intent for a derived run (e.g. aa4x); "
                          "required with --derive-from, becomes the run-dir "
@@ -281,11 +286,25 @@ def main(argv=None):
         if args.from_video:
             ap.error("--derive-from adopts the parent's oracle.mp4; "
                      "--from-video is mutually exclusive")
-        if not args.name:
-            args.name = "%s-%s" % (args.derive_from, args.tag)
+        # PARENT resolves as a sibling name in --out first, then as a path
+        # (relative to cwd or absolute) so a parent in ANOTHER root is
+        # expressible. The name-only form was the whole bug behind the
+        # raccoon provenance gap (2026-08-06): pipeline/raccoon-wave's real
+        # parent lived in out/spike2/, `out_root / name` could not reach it,
+        # so the run was made with a raw --from-video — no response.json, no
+        # seed, and every descendant inherited the void. r011 went unresolved
+        # for a week. A parent you cannot name is a parent you cannot inherit.
         parent_dir = out_root / args.derive_from
         if not parent_dir.is_dir():
-            ap.error("--derive-from parent not found: %s" % parent_dir)
+            as_path = Path(args.derive_from)
+            if as_path.is_dir():
+                parent_dir = as_path
+            else:
+                ap.error("--derive-from parent not found: tried %s and %s"
+                         % (parent_dir, as_path))
+        # The derived dir is named for the parent's BASENAME, never a path.
+        if not args.name:
+            args.name = "%s-%s" % (parent_dir.name, args.tag)
         if not (parent_dir / "oracle.mp4").exists():
             ap.error("--derive-from parent has no oracle.mp4: %s"
                      % (parent_dir / "oracle.mp4"))
@@ -334,15 +353,52 @@ def main(argv=None):
                 pj = {}
         else:
             pj = {}
-        record["derived_from"] = args.derive_from
+        # The seed comes from the COPIED response.json first, the parent's
+        # run.json second. response.json is the generation record itself and
+        # is the only provenance a spike2-era parent has (those dirs predate
+        # run.json entirely) — reading run.json alone returned None for them
+        # and manufactured a provenance gap out of a parent that knew its own
+        # seed perfectly well.
+        presp = {}
+        copied_resp = rdir / "response.json"
+        if copied_resp.exists():
+            try:
+                presp = json.loads(copied_resp.read_text())
+            except ValueError:
+                presp = {}
+        record["derived_from"] = parent_dir.name
+        if parent_dir.parent.resolve() != out_root.resolve():
+            record["derived_from_root"] = parent_dir.parent.name
         record["stage_delta_note"] = args.tag
-        record["prompt"] = record["prompt"] or pj.get("prompt")
+        record["prompt"] = record["prompt"] or presp.get("prompt") \
+            or pj.get("prompt")
         record["image"] = record["image"] or pj.get("image")
         record["image_md5"] = pj.get("image_md5")
         record["image_snapshot"] = pj.get("image_snapshot")
-        record["seed"] = pj.get("seed")
+        record["seed"] = presp.get("seed", pj.get("seed"))
         if pj.get("master_qc"):
             record["master_qc"] = pj["master_qc"]
+
+        # A derivation that inherits no seed is a FAILED derivation, not a
+        # quiet one. Without a seed the sandbox cannot resolve an r-id, the
+        # clip shows `?` forever, and the gap propagates to everything
+        # derived from it in turn — which is exactly how three raccoon runs
+        # lost r011. Fail here, loudly, at the moment the provenance is lost
+        # and while the operator still knows what they meant.
+        if record["seed"] is None:
+            ap.error(
+                "--derive-from %s inherits NO seed — refusing to write an "
+                "orphaned run.\n"
+                "  Parent: %s\n"
+                "  It has no response.json seed and no run.json seed, so the "
+                "derived run\n"
+                "  could never resolve an r-id (the sandbox would show `?`), "
+                "and every\n"
+                "  run derived from IT would inherit the same void.\n"
+                "  Fix the parent's provenance first: put the original "
+                "generation's\n"
+                "  response.json (the one carrying the seed) in %s"
+                % (args.derive_from, parent_dir, parent_dir))
 
     try:
         if args.image:
