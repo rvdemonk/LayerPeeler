@@ -65,6 +65,58 @@ def log(msg):
     print(msg, flush=True)
 
 
+def _adopt_provenance(src, rdir, out_root):
+    """Provenance for a --from-video whose mp4 IS another run's oracle.
+
+    A raw --from-video pointed at out/<root>/<run>/oracle.mp4 re-encodes an
+    existing generation. The pixels carry that generation's seed whether or
+    not the operator said --derive-from, so the seed is a FACT about the
+    clip, not a claim about intent — and dropping it is how
+    raccoon-{hop,surprise}-bare lost their r-ids silently (2026-08-06).
+
+    Detection is deliberately narrow: the file must be named oracle.mp4 and
+    its directory must carry a seed (response.json first, run.json second).
+    An arbitrary mp4 that merely happens to sit beside a JSON file is not a
+    derivation, and adopting one would invent provenance rather than find it.
+
+    Returns (meta, notice). meta is empty when nothing is detected; notice is
+    the line to log — including the case where a run dir was recognised but
+    had no seed to give, because THAT silence is the original bug.
+    """
+    if src.name != "oracle.mp4":
+        return {}, None
+    pdir = src.parent
+    seed, whence = None, None
+    for fname in ("response.json", "run.json"):
+        f = pdir / fname
+        if not f.exists():
+            continue
+        try:
+            data = json.loads(f.read_text())
+        except ValueError:
+            continue
+        if data.get("seed") is not None:
+            seed, whence = data["seed"], fname
+            break
+    if seed is None:
+        if (pdir / "response.json").exists() or (pdir / "run.json").exists():
+            return {}, ("  provenance: %s looks like a run dir but carries NO "
+                        "seed — this clip will show `?` in the sandbox and so "
+                        "will anything derived from it. Fix the parent's "
+                        "response.json." % pdir)
+        return {}, None
+    meta = {"seed": seed, "derived_from": pdir.name}
+    if pdir.parent.resolve() != Path(out_root).resolve():
+        meta["derived_from_root"] = pdir.parent.name
+    resp = pdir / "response.json"
+    if resp.exists() and not (rdir / "response.json").exists():
+        shutil.copy2(resp, rdir / "response.json")
+    return meta, ("  provenance: adopted seed %s from %s (%s) — this clip is "
+                  "a re-encode of that generation and inherits its r-id. "
+                  "Use --derive-from to say so explicitly."
+                  % (seed, pdir.name, whence))
+
+
 def stage_source(args, rdir, t):
     """Get the mp4 into the run dir: generate it, or adopt one on disk."""
     mp4 = rdir / "oracle.mp4"
@@ -73,7 +125,16 @@ def stage_source(args, rdir, t):
         with t.stage("adopt_video", source=str(src)):
             if src != mp4.resolve():
                 shutil.copy2(src, mp4)
-        return mp4, {"source": str(src), "generated": False}
+        meta = {"source": str(src), "generated": False}
+        # --derive-from already inherited provenance explicitly (and more
+        # fully: master.*, image_md5, stage_delta_note). Do not let detection
+        # overwrite the deliberate record with a rediscovered one.
+        if not args.derive_from:
+            found, notice = _adopt_provenance(src, rdir, args.out)
+            meta.update(found)
+            if notice:
+                log(notice)
+        return mp4, meta
     with t.stage("generate", tier=args.tier, res=args.resolution) as rec:
         res = gen.generate(args.image, args.prompt, mp4, tier=args.tier,
                            resolution=args.resolution, seed=args.seed,
