@@ -207,12 +207,15 @@ def main(argv=None):
     ap.add_argument("--aa-width", type=float, default=0.0,
                     help="half-width (px) of the SDF alpha ramp; 0 (default) "
                          "skips the stage. Opt-in, for clay/3D sources")
-    ap.add_argument("--matte-ss", type=int, default=1, choices=(1, 2, 4),
+    ap.add_argument("--matte-ss", type=int, default=2, choices=(1, 2, 4),
                     help="supersample the matte KEY by this factor: the "
                          "unchanged keying+morphology runs at ss x resolution "
                          "and the alpha is box-filtered down, so the rim gets "
                          "true fractional coverage instead of a staircase. "
-                         "1 (default) is the byte-identical native path")
+                         "Default 2 (Lewis-ratified 2026-08-06: 'absolutely "
+                         "better and more smooth'; the knee — 76-82%% of ss4's "
+                         "gain, +15-18%% gz). 1 = byte-identical native path "
+                         "(pre-2026-08-06 comparability regime)")
     ap.add_argument("--defringe", action="store_true",
                     help="run the rim-RGB defringe stage (opt-in, for clay/3D "
                          "sources; off by default — see --no-defringe)")

@@ -48,11 +48,12 @@ with fal credits** — matting, gating and encoding are deterministic and
 byte-reproducible from an mp4, so there is no reason to buy a new
 generation to test our own arithmetic.
 
-## Rim stages — both opt-in
+## Rim quality — supersampled matte (default) and the opt-in stages
 
 | stage | flag | default | what it does | where it earns its keep |
 |---|---|---|---|---|
-| antialias | `--aa-width W` | `0.0` (off) | SDF coverage ramp over the rim alpha; interior alpha unchanged | clay/3D sources, where the matte's morphology chain leaves a visible staircase |
+| matte supersample | `--matte-ss {1,2,4}` | **`2`** (Lewis-ratified 2026-08-06) | keys at ss× resolution, box-downs alpha → true fractional rim coverage; also sweeps the native path's detached alpha specks | every run; the staircase fix. Costs +15-18% gz, flat across rungs. `1` = byte-identical native path (pre-2026-08-06 regime) |
+| antialias | `--aa-width W` | `0.0` (off) | SDF coverage ramp over the rim alpha; interior alpha unchanged | clay/3D sources, where the matte's morphology chain leaves a visible staircase (largely superseded by `--matte-ss 2`) |
 | defringe | `--defringe` | off | repaints rim RGB from the nearest interior source; alpha never touched | clay/3D sources on saturated backgrounds, where the rim carries background-mixed colour |
 
 **Flat 2D art: leave both off.** Each was built for the clay/3D frog and each
