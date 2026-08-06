@@ -3,8 +3,8 @@
     mascot PNG + prompt
       -> Wan 2.2 i2v (fal, turbo, 480p, looped by construction)
       -> flat-background matte + colour norm
-      -> rim-alpha anti-alias (SDF coverage ramp, interior unchanged)
-      -> rim-RGB defringe (nearest-source repaint, alpha untouched)
+      -> rim-alpha anti-alias   (opt-in, --aa-width; clay/3D sources)
+      -> rim-RGB defringe       (opt-in, --defringe; clay/3D sources)
       -> basic-integrity + colour/velocity gates
       -> 512px WebP q65 @ 24fps frame-seq Lottie (+ gzip, + .lottie)
       -> posterization + shimmer gates on the encoded assets
@@ -195,11 +195,30 @@ def main(argv=None):
     ap.add_argument("--clobber", action="store_true",
                     help="overwrite an existing run dir in place (default: "
                          "hard-error naming --clobber vs --derive-from)")
-    ap.add_argument("--aa-width", type=float, default=1.25,
-                    help="half-width (px) of the SDF alpha ramp; 0 to skip")
+    # AA and defringe are both OPT-IN. Each was built for the clay/3D frog and
+    # each measurably damages flat 2D line art:
+    #   - the SDF ramp is built from the binarised 128-mask, so it blurs the
+    #     staircase rather than removing it, and on features thinner than ~6px
+    #     it regenerates alpha wholesale.
+    #   - defringe's fallback (defringe.py, the MAX_PROPAGATE_DIST branch)
+    #     repaints rim pixels with no source within 6.5px using the global
+    #     median interior colour, which dissolves thin line-art into fill.
+    # Retained as flags because both earn their keep on clay/3D sources.
+    ap.add_argument("--aa-width", type=float, default=0.0,
+                    help="half-width (px) of the SDF alpha ramp; 0 (default) "
+                         "skips the stage. Opt-in, for clay/3D sources")
+    ap.add_argument("--defringe", action="store_true",
+                    help="run the rim-RGB defringe stage (opt-in, for clay/3D "
+                         "sources; off by default — see --no-defringe)")
     ap.add_argument("--no-defringe", action="store_true",
-                    help="skip the rim-RGB defringe stage (flat art may prefer "
-                         "crisp outlines over rim repaint)")
+                    help="deprecated no-op: defringe is off unless --defringe "
+                         "is passed. Accepted so existing invocations still run")
+    ap.add_argument("--edge-dense", metavar="START:END",
+                    help="source-frame band to cover densely in the edge "
+                         "verification sheet, on top of the even full-cycle "
+                         "sweep (e.g. 148:161). No default band — a hardcoded "
+                         "one makes every other clip's sheet claim coverage "
+                         "it does not have")
     ap.add_argument("--force", action="store_true",
                     help="override master-QC and pre-encode integrity FAILs")
     ap.add_argument("--out", default=str(OUT))
@@ -208,6 +227,17 @@ def main(argv=None):
 
     if not args.derive_from and not args.name:
         ap.error("--name is required unless --derive-from supplies it")
+    dense_frames = None
+    if args.edge_dense:
+        try:
+            lo, hi = (int(x) for x in args.edge_dense.split(":", 1))
+        except ValueError:
+            ap.error("--edge-dense wants START:END source frames, got %r"
+                     % args.edge_dense)
+        dense_frames = range(lo, hi)
+    if args.defringe and args.no_defringe:
+        ap.error("--defringe and --no-defringe contradict each other; "
+                 "defringe is opt-in and --no-defringe is a deprecated no-op")
     profiles = [p.strip() for p in args.profiles.split(",") if p.strip()]
     unknown = [p for p in profiles if p not in enc.PROFILES]
     if unknown:
@@ -356,7 +386,7 @@ def main(argv=None):
                 rgba = antialias_frames(rgba, rdir / "rgba",
                                         width=args.aa_width, log=log)
 
-        if not args.no_defringe:
+        if args.defringe:
             with t.stage("defringe", frames=len(rgba)):
                 rgba = defringe_frames(rgba, rdir / "rgba", log=log)
 
@@ -434,7 +464,7 @@ def main(argv=None):
         if not args.no_eyeball:
             with t.stage("eyeball"):
                 eyeball(rgba, rdir, args.name, fps)
-                edge_sheet(rgba, rdir, args.name)
+                edge_sheet(rgba, rdir, args.name, dense_frames=dense_frames)
 
         record.update({"frames": len(frames), "fps": fps, "edge": edge,
                        "native_edge": native, "encodes": encodes})

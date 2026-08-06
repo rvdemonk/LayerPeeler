@@ -6,6 +6,8 @@ Consolidates the spike-2 harness into a single operable run:
 mascot PNG + prompt
   -> Wan 2.2 A14B turbo i2v on fal, 480p, looped by construction   [generate]
   -> flat-background matte + Lab colour norm                        [matte]
+  -> rim-alpha anti-alias        OPT-IN, --aa-width W               [antialias]
+  -> rim-RGB defringe            OPT-IN, --defringe                 [defringe]
   -> basic-integrity + colour/velocity gates                        [gates]
   -> 512px WebP q65 @ 24fps frame-seq Lottie, gzip + .lottie        [encode]
   -> posterization pair + temporal-shimmer gates on the assets      [gates]
@@ -45,6 +47,32 @@ python3 sandbox/serve.py --root out/pipeline
 with fal credits** — matting, gating and encoding are deterministic and
 byte-reproducible from an mp4, so there is no reason to buy a new
 generation to test our own arithmetic.
+
+## Rim stages — both opt-in
+
+| stage | flag | default | what it does | where it earns its keep |
+|---|---|---|---|---|
+| antialias | `--aa-width W` | `0.0` (off) | SDF coverage ramp over the rim alpha; interior alpha unchanged | clay/3D sources, where the matte's morphology chain leaves a visible staircase |
+| defringe | `--defringe` | off | repaints rim RGB from the nearest interior source; alpha never touched | clay/3D sources on saturated backgrounds, where the rim carries background-mixed colour |
+
+**Flat 2D art: leave both off.** Each was built for the clay/3D frog and each
+measurably damages line art. The AA ramp is built from the binarised 128-mask,
+so it blurs the staircase rather than removing it, and on features thinner than
+~6px it regenerates alpha wholesale. Defringe's fallback branch
+(`defringe.py`, the `MAX_PROPAGATE_DIST` case) repaints rim pixels with no
+source within 6.5px using the global median interior colour, which dissolves
+thin outlines into fill.
+
+`--no-defringe` is still accepted so older invocations run, but it is now a
+no-op: defringe is off unless `--defringe` is passed. Passing both is an error.
+
+**Calibration caveat:** the gates score whatever is in `rgba/` — the AA and
+defringe stages overwrite it in place, so a run with `--aa-width` on is gated
+post-AA. Gate numbers are therefore only comparable across runs with the same
+rim-stage configuration. Which stages ran is on disk: `antialias` (with its
+`width`) and `defringe` appear in `timings.json` / `run.json["timings"]` only
+when they ran, so a gate number can always be traced back to the rim
+configuration that produced it.
 
 ## What one run leaves on disk
 

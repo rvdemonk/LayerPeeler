@@ -107,23 +107,35 @@ def _edge_regions(rgba_frames, n_regions=4, crop=96, grid=3):
             cy1 = int(y0 + (gy + 1) * dy + 1)
             count = int(boundary[cy0:cy1, cx0:cx1].sum())
             if count > 0:
-                bxs, bys = np.where(boundary[cy0:cy1, cx0:cx1])
-                scores.append((count, (cx0 + int(bxs.mean()),
-                                       cy0 + int(bys.mean()))))
+                # np.where returns (rows, cols) = (y, x). Binding them the
+                # other way round transposed every centroid and put the crops
+                # off the boundary they were selected for.
+                brows, bcols = np.where(boundary[cy0:cy1, cx0:cx1])
+                scores.append((count, (cx0 + int(bcols.mean()),
+                                       cy0 + int(brows.mean()))))
 
     scores.sort(reverse=True)
     return [c for _, c in scores[:n_regions]]
 
 
 def edge_sheet(rgba_frames, out_dir, name,
-               sample_every=20, wink_range=range(148, 161),
+               sample_every=20, dense_frames=None,
                n_regions=4, crop=96):
     """Generate the edge verification contact sheet.
 
-    Composites 4 edge-region crops (auto-selected by silhouette boundary
-    density) at 2x nearest-neighbour zoom on light, dark, and magenta
-    checkerboards. Sweeps the full cycle: every `sample_every` frames
-    plus dense coverage of the `wink_range`.
+    Composites `n_regions` edge-region crops (auto-selected by silhouette
+    boundary density) at 2x nearest-neighbour zoom on light, dark, and
+    magenta checkerboards. The default sweep is even across the FULL cycle
+    (every `sample_every` source frames); `dense_frames` is an optional
+    iterable of extra source frames to cover densely, for a band the
+    operator already suspects. It has no default band: a hardcoded one
+    (this was `range(148, 161)`, the frog-wave wink) silently makes every
+    other clip's sheet claim coverage it does not have.
+
+    Regions are labelled `region-N (x,y)` from the boundary-density search
+    that produced them. They are NOT anatomy — nothing here determines
+    which part of a character a crop lands on, and stamping "head"/"arm"
+    on a derived centroid asserts a fact the code never established.
 
     Written to out_dir/verification/; this is the artefact the appraisal
     gate doctrine requires Claude to sweep before showing Lewis.
@@ -131,10 +143,11 @@ def edge_sheet(rgba_frames, out_dir, name,
     vdir = Path(out_dir) / "verification"
     vdir.mkdir(parents=True, exist_ok=True)
     regions = _edge_regions(rgba_frames, n_regions, crop)
-    region_labels = ["head", "arm", "footL", "footR"][:n_regions]
+    region_labels = ["region-%d (%d,%d)" % (i + 1, cx, cy)
+                     for i, (cx, cy) in enumerate(regions)]
 
     full_set = set(list(range(0, len(rgba_frames), sample_every)) +
-                   list(wink_range))
+                   list(dense_frames or []))
     frame_indices = sorted(f for f in full_set if f < len(rgba_frames))
 
     bg_names = {0: "light", 1: "dark", 2: "magenta"}
@@ -155,7 +168,11 @@ def edge_sheet(rgba_frames, out_dir, name,
                 comp = _composite(patch, bg)
                 zoomed = cv2.resize(comp, (crop * 2, crop * 2),
                                     interpolation=cv2.INTER_NEAREST)
-                cv2.putText(zoomed, "%s f%d" % (rlabel, fi), (4, 18),
+                # Two lines: the derived region label does not fit beside the
+                # frame number on a 2x-zoomed `crop`-wide tile.
+                cv2.putText(zoomed, "f%d" % fi, (4, 18),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 100, 100), 1)
+                cv2.putText(zoomed, rlabel, (4, 34),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 100, 100), 1)
                 tiles.append(zoomed)
             rows.append(np.hstack(tiles))
