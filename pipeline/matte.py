@@ -38,36 +38,92 @@ BORDER_PX = 8          # border band sampled for the background colour
 ALPHA_SOLID = 128      # alpha above which a pixel counts as "character"
 
 
-def matte_frames(frames, mdir, log=None):
+def _k(n, ss):
+    """Radius-preserving kernel size: a square n x n kernel has Chebyshev
+    radius (n-1)/2 native px, so the same PHYSICAL radius at scale ss is
+    ss*(n-1)/2, i.e. side ss*(n-1)+1. Square shape is kept so the diagonal
+    reach (sqrt(2)*r) scales by the same factor as the axial reach. At
+    ss=1 this returns n.
+    """
+    return np.ones((ss * (n - 1) + 1,) * 2, np.uint8)
+
+
+def _alpha_supersampled(im, ss):
+    """Alpha from the SAME key + morphology, run at ss x resolution.
+
+    The point is true fractional coverage. At native scale the hard mask's
+    decision boundary is forced onto the pixel grid and a step function is
+    multiplied against the soft alpha, so the rim quantises. At ss x the
+    boundary is placed with 1/ss-pixel precision and the box-down converts
+    sub-pixel boundary POSITION into graded coverage.
+
+    Only the spatial quantities scale (kernels, border band). ALPHA_LO/HI
+    are photometric — RGB euclidean distance — and interpolation resamples
+    colour positions, not magnitudes; scaling them would move the
+    alpha=0.5 contour, i.e. change the silhouette.
+    """
+    h, w = im.shape[:2]
+    big = np.clip(cv2.resize(im, (w * ss, h * ss),
+                             interpolation=cv2.INTER_LANCZOS4), 0, 255)
+    b = BORDER_PX * ss
+    border = np.concatenate([big[:b].reshape(-1, 3), big[-b:].reshape(-1, 3),
+                             big[:, :b].reshape(-1, 3),
+                             big[:, -b:].reshape(-1, 3)])
+    bg = np.median(border, axis=0)
+    d = np.linalg.norm(big - bg, axis=-1)
+    a = np.clip((d - ALPHA_LO) / (ALPHA_HI - ALPHA_LO), 0, 1)
+    a = a * a * (3 - 2 * a)
+    hard = (a > 0.5).astype(np.uint8)
+    hard = cv2.morphologyEx(hard, cv2.MORPH_OPEN, _k(3, ss))
+    hard = cv2.morphologyEx(hard, cv2.MORPH_CLOSE, _k(5, ss))
+    ncc, cc, stats, _ = cv2.connectedComponentsWithStats(hard)
+    if ncc > 1:
+        bigc = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        hard = (cc == bigc).astype(np.uint8)
+    a = a * cv2.dilate(hard, _k(7, ss))
+    # Explicit box mean rather than cv2 INTER_AREA: same filter, auditable
+    # arithmetic. This is where sub-pixel coverage becomes real gradation.
+    return a.reshape(h, ss, w, ss).mean(axis=(1, 3))
+
+
+def matte_frames(frames, mdir, log=None, ss=1):
     """Matte a whole sequence. Returns the written RGBA paths.
 
     Sequence-stateful by design: the colour norm references frame 0, so
     frames cannot be matted independently or in a different order without
     changing the output.
+
+    `ss` supersamples the KEY only (opt-in, default 1 = the algorithm
+    above, byte for byte). ss>1 changes the alpha channel alone: RGB stays
+    the native frame, because box-downing an upsampled RGB would lowpass
+    the whole character, not the rim.
     """
     mdir.mkdir(parents=True, exist_ok=True)
     outs = []
     ref_lab = None
     for n, fp in enumerate(frames):
         im = cv2.imread(str(fp)).astype(np.float32)
-        border = np.concatenate([im[:BORDER_PX].reshape(-1, 3),
-                                 im[-BORDER_PX:].reshape(-1, 3),
-                                 im[:, :BORDER_PX].reshape(-1, 3),
-                                 im[:, -BORDER_PX:].reshape(-1, 3)])
-        bg = np.median(border, axis=0)
-        d = np.linalg.norm(im - bg, axis=-1)
-        a = np.clip((d - ALPHA_LO) / (ALPHA_HI - ALPHA_LO), 0, 1)
-        a = a * a * (3 - 2 * a)
-        hard = (a > 0.5).astype(np.uint8)
-        hard = cv2.morphologyEx(hard, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-        hard = cv2.morphologyEx(hard, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-        # Keep only the largest connected component: drops background
-        # speckle without eroding the character.
-        ncc, cc, stats, _ = cv2.connectedComponentsWithStats(hard)
-        if ncc > 1:
-            big = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-            hard = (cc == big).astype(np.uint8)
-        a = a * cv2.dilate(hard, np.ones((7, 7), np.uint8))
+        if ss == 1:
+            border = np.concatenate([im[:BORDER_PX].reshape(-1, 3),
+                                     im[-BORDER_PX:].reshape(-1, 3),
+                                     im[:, :BORDER_PX].reshape(-1, 3),
+                                     im[:, -BORDER_PX:].reshape(-1, 3)])
+            bg = np.median(border, axis=0)
+            d = np.linalg.norm(im - bg, axis=-1)
+            a = np.clip((d - ALPHA_LO) / (ALPHA_HI - ALPHA_LO), 0, 1)
+            a = a * a * (3 - 2 * a)
+            hard = (a > 0.5).astype(np.uint8)
+            hard = cv2.morphologyEx(hard, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+            hard = cv2.morphologyEx(hard, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+            # Keep only the largest connected component: drops background
+            # speckle without eroding the character.
+            ncc, cc, stats, _ = cv2.connectedComponentsWithStats(hard)
+            if ncc > 1:
+                big = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+                hard = (cc == big).astype(np.uint8)
+            a = a * cv2.dilate(hard, np.ones((7, 7), np.uint8))
+        else:
+            a = _alpha_supersampled(im, ss)
         rgba = np.dstack([im, a * 255]).astype(np.uint8)
 
         ch = rgba[..., 3] > ALPHA_SOLID

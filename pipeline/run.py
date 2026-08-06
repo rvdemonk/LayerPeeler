@@ -207,6 +207,12 @@ def main(argv=None):
     ap.add_argument("--aa-width", type=float, default=0.0,
                     help="half-width (px) of the SDF alpha ramp; 0 (default) "
                          "skips the stage. Opt-in, for clay/3D sources")
+    ap.add_argument("--matte-ss", type=int, default=1, choices=(1, 2, 4),
+                    help="supersample the matte KEY by this factor: the "
+                         "unchanged keying+morphology runs at ss x resolution "
+                         "and the alpha is box-filtered down, so the rim gets "
+                         "true fractional coverage instead of a staircase. "
+                         "1 (default) is the byte-identical native path")
     ap.add_argument("--defringe", action="store_true",
                     help="run the rim-RGB defringe stage (opt-in, for clay/3D "
                          "sources; off by default — see --no-defringe)")
@@ -304,7 +310,8 @@ def main(argv=None):
                             "profiles": profiles})
     scratch = Path(tempfile.mkdtemp(prefix="pipeline-%s-" % args.name))
     record = {"name": args.name, "prompt": args.prompt,
-              "image": args.image, "ship_profile": enc.PROFILES[ship].name}
+              "image": args.image, "ship_profile": enc.PROFILES[ship].name,
+              "matte_ss": args.matte_ss}
 
     if args.derive_from:
         # Inherit provenance BEFORE anything else writes to the run dir.
@@ -378,8 +385,9 @@ def main(argv=None):
             rec["fps"] = fps
         log("  %d frames @ %dfps (probed)" % (len(frames), fps))
 
-        with t.stage("matte", frames=len(frames)):
-            rgba = matte_frames(frames, rdir / "rgba", log=log)
+        with t.stage("matte", frames=len(frames), ss=args.matte_ss):
+            rgba = matte_frames(frames, rdir / "rgba", log=log,
+                                ss=args.matte_ss)
 
         if args.aa_width > 0:
             with t.stage("antialias", width=args.aa_width):
