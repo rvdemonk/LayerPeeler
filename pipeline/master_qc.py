@@ -82,14 +82,62 @@ def _bbox(mask):
     return [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]
 
 
+# Intake sanity bounds (hardening 2026-08-06, ahead of any upload surface).
+# The image is inlined as base64 into the fal request (x1.37 overhead), so
+# file size IS request size. Aspect is checked because run.py requests 1:1
+# from Wan unconditionally — a non-square master would be silently
+# letterboxed or cropped by the model, which is a worse failure than a
+# refusal (the user's framing is destroyed without anyone deciding that).
+MAX_FILE_MB = 8
+MIN_EDGE_PX = 300
+
+
+def _empty_record(fails):
+    """A full-shape record for inputs that cannot be analysed at all —
+    every consumer (run.json, the sandbox) reads these keys."""
+    return {"bg": None, "character_px": 0, "interior_px": 0,
+            "loss_px": 0, "hard_px": 0, "hard_bbox": None,
+            "speckle_px": 0, "speckle_regions": [], "pocket_px": 0,
+            "feather_px": 0, "feather_bbox": None,
+            "fails": fails, "flags": []}
+
+
 def qc_master(path, map_path=None):
     """Check one master image. Returns a gates.py-shaped record.
 
     verdict semantics follow gates.py: `fails` = will ship broken,
     `flags` = screening signal for a human.
     """
-    rgb = _load_rgb(path)
+    path = Path(path)
+    try:
+        rgb = _load_rgb(path)
+    except Exception as e:
+        # PIL raising here means the file is not a decodable raster image
+        # (an .svg, a truncated download, a renamed pdf). Before this
+        # guard, that surfaced as an UnidentifiedImageError traceback —
+        # or, if it happened to decode nowhere, at the fal API after QC
+        # "passed". Refuse legibly, before anything is spent.
+        return _empty_record(
+            ["master_undecodable: %s is not a decodable raster image "
+             "(%s: %s) — png/jpeg/webp only" % (path.name,
+                                                type(e).__name__, e)])
     h, w = rgb.shape[:2]
+    intake_fails, intake_flags = [], []
+    size_mb = path.stat().st_size / 1e6
+    if size_mb > MAX_FILE_MB:
+        intake_fails.append(
+            "master_size: %.1f MB file inlines to a ~%.0f MB base64 request "
+            "(cap %d MB) — downscale or recompress" %
+            (size_mb, size_mb * 1.37, MAX_FILE_MB))
+    if h != w:
+        intake_fails.append(
+            "master_aspect: %dx%d is not square — the pipeline requests 1:1 "
+            "from Wan, so a non-square master is silently letterboxed or "
+            "cropped by the model. Pad to square deliberately instead" % (w, h))
+    if min(h, w) < MIN_EDGE_PX:
+        intake_flags.append(
+            "master_small: %dpx min edge — Wan upsamples from this; expect "
+            "soft detail" % min(h, w))
     scale = (h * w) / (1024.0 * 1024.0)
     border = np.concatenate([rgb[:BORDER_PX].reshape(-1, 3),
                              rgb[-BORDER_PX:].reshape(-1, 3),
@@ -137,7 +185,7 @@ def qc_master(path, map_path=None):
     speckle_px = int(speckle.sum())
     loss_px = hard_px + speckle_px
 
-    fails, flags = [], []
+    fails, flags = intake_fails, intake_flags
     if loss_px > LOSS_FAIL_PX * scale:
         fails.append("master_loss_mass: %d px guaranteed transparent at the "
                      "matte (%d interior d<%.0f + %d enclosed bg-coloured; "

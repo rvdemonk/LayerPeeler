@@ -461,6 +461,22 @@ def main(argv=None):
             integ = G.basic_integrity(rgba, loop=not args.no_loop)
         with t.stage("gate_holes"):
             hole_g = G.holes(rgba)
+
+        # Fail fast on frame physics BEFORE colour/identity analysis: a
+        # clip that failed integrity is being rerolled, not analysed, and
+        # strips/identity assume non-degenerate masks — running them on an
+        # empty-mask clip used to die in a cv2 traceback instead of the
+        # clean FAIL integrity had already computed (hardening 2026-08-06).
+        early = G.verdict(integ, hole_g)
+        if early["fails"] and not args.force:
+            record["gates"] = {**early, "detail": {"integrity": integ,
+                                                   "holes": hole_g}}
+            log("  integrity: FAIL%s" % "".join(
+                "\n    - " + x for x in early["fails"] + early["flags"]))
+            raise SystemExit("basic integrity FAILED — not encoding. "
+                             "A known-broken clip must be rerolled, not "
+                             "shipped as if fitted. (--force overrides)")
+
         with t.stage("gate_strips"):
             strip_g, series = G.strips(rgba)
             G.draw_strips(series, strip_g, rdir / "gates.png")

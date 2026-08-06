@@ -219,8 +219,12 @@ def basic_integrity(frames, loop=True):
         "frames": len(frames), "edge": int(w),
         "empty_frames": int((areas < MIN_MASK_PX).sum()),
         "area_median_px": med,
-        "silhouette_rel_range": [float(areas.min() / med),
-                                 float(areas.max() / med)],
+        # med=0 (all frames empty) would put NaN here, and NaN survives
+        # python's json.dumps into gates.json where strict parsers (the
+        # sandbox's JSON.parse) reject the whole file. empty_frames is the
+        # fail that fires for that clip; the range degrades to zeros.
+        "silhouette_rel_range": [float(areas.min() / med) if med else 0.0,
+                                 float(areas.max() / med) if med else 0.0],
         "border_frac_max": float(max(borders)) if borders else 0.0,
         "centroid_travel_px": travel,
         "centroid_travel_frac": travel / max(w, 1),
@@ -388,7 +392,18 @@ def strips(frames):
     prev_gray = prev_a = None
     for fp in frames:
         im = _load(fp)
-        a, lab, sat = _character_stats(im)
+        a = _mask(im)
+        if a.any():
+            _, lab, sat = _character_stats(im)
+        else:
+            # Degenerate frame: zero character pixels. basic_integrity has
+            # already FAILed the clip for it; strips must survive to
+            # report (and under --force, to draw) instead of dying inside
+            # cv2.cvtColor on an empty array (hardening 2026-08-06).
+            # Carry the previous colour sample so the series stays
+            # frame-aligned without inventing a colour cliff.
+            lab = labs[-1] if labs else np.zeros(3, np.float32)
+            sat = sats[-1] if sats else 0.0
         labs.append(lab)
         sats.append(sat)
         g = cv2.cvtColor(im[..., :3], cv2.COLOR_BGR2GRAY)
@@ -396,16 +411,20 @@ def strips(frames):
             flow = cv2.calcOpticalFlowFarneback(
                 prev_gray, g, None, 0.5, 3, 15, 3, 5, 1.2, 0)
             mag = np.linalg.norm(flow, axis=-1)
-            vel.append(float(mag[a | prev_a].mean()))
+            sel = a | prev_a
+            vel.append(float(mag[sel].mean()) if sel.any() else 0.0)
             # Face region ~ upper-central band of the character bbox. A
             # mascot heuristic, not a detector — it was enough to catch the
             # dead face Lewis saw on raccoon-jig.
-            ys, xs = np.nonzero(a)
-            x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
-            bw, bh = x1 - x0, y1 - y0
-            fb = mag[y0 + int(.12 * bh):y0 + int(.50 * bh),
-                     x0 + int(.25 * bw):x0 + int(.75 * bw)]
-            fvel.append(float(fb.mean()) if fb.size else 0.0)
+            if a.any():
+                ys, xs = np.nonzero(a)
+                x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+                bw, bh = x1 - x0, y1 - y0
+                fb = mag[y0 + int(.12 * bh):y0 + int(.50 * bh),
+                         x0 + int(.25 * bw):x0 + int(.75 * bw)]
+                fvel.append(float(fb.mean()) if fb.size else 0.0)
+            else:
+                fvel.append(0.0)
         prev_gray, prev_a = g, a
 
     labs, sats = np.array(labs), np.array(sats)
